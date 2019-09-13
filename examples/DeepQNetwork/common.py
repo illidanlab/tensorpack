@@ -13,8 +13,7 @@ from tensorpack.utils import logger, get_tqdm
 from tensorpack.utils.concurrency import ShareSessionThread, StoppableThread
 from tensorpack.utils.stats import StatCounter
 
-
-def play_one_episode(env, func, render=False):
+def play_one_episode(env, func, render=False, save=False):
     def predict(s):
         """
         Map from observation to action, with 0.01 greedy.
@@ -28,21 +27,51 @@ def play_one_episode(env, func, render=False):
 
     ob = env.reset()
     sum_r = 0
+    observations = [ob]
+    actions = []
+    rewards = []
     while True:
         act = predict(ob)
+        actions.append(act) # record action
+        del ob # free memory space
         ob, r, isOver, info = env.step(act)
+        del act
+        rewards.append(r) # record immediate reward
+        observations.append(ob) # record next observaction
         if render:
             env.render()
         sum_r += r
         if isOver:
-            return sum_r
+            if not save:
+                return sum_r
+            return sum_r, observations, actions, rewards
 
 
-def play_n_episodes(player, predfunc, nr, render=False):
-    logger.info("Start Playing ... ")
+def play_n_episodes(player, predfunc, nr, render=False, save=False, filename='sample.npz'):
+    #logger.info("Start Playing ... ")
+    observations = []
+    actions = [] 
+    rewards = []
     for k in range(nr):
-        score = play_one_episode(player, predfunc, render=render)
-        print("{}/{}, score={}".format(k, nr, score))
+        score_info = play_one_episode(player, predfunc, render=render, save=save)
+        if not save:
+            score = score_info
+            information = "{}/{}, score={}".format(k, nr, score)
+        else:
+            score = score_info[0]
+            episode_len = len(score_info[1])
+            information = "{}/{}, score={:3.2f}, episode length={:5d}".format(\
+                k, nr, score, episode_len)
+            print(information)
+            observations.append(np.array(score_info[1]))
+            actions.append(np.array(score_info[2]))
+            rewards.append(np.array(score_info[3]))
+    observations = np.array(observations)
+    np.savez(filename, observations=observations, actions=actions, rewards=rewards)
+    print("Save complete.")
+
+            
+            
 
 
 def eval_with_funcs(predictors, nr_eval, get_player_fn, verbose=False):

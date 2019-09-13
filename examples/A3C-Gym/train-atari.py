@@ -25,6 +25,7 @@ from atari_wrapper import FireResetEnv, FrameStack, LimitLength, MapState
 from common import Evaluator, eval_model_multithread, play_n_episodes
 from simulator import SimulatorMaster, SimulatorProcess, TransitionExperience
 
+
 if six.PY3:
     from concurrent import futures
     CancelledError = futures.CancelledError
@@ -220,7 +221,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
 
 def train():
     assert tf.test.is_gpu_available(), "Training requires GPUs!"
-    dirname = os.path.join('train_log', 'train-atari-{}'.format(ENV_NAME))
+    dirname = os.path.join('/mnt/research/judy/reward_shaping/sanity/', 'train-atari-{}'.format(ENV_NAME))
     logger.set_logger_dir(dirname)
 
     # assign GPUs for training & inference
@@ -275,12 +276,15 @@ def train():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', help='comma separated list of GPU(s) to use.')
-    parser.add_argument('--load', help='load model')
-    parser.add_argument('--env', help='env', required=True)
+    parser.add_argument('--load', help='load model', default="/mnt/research/judy/reward_shaping/Pong-v0.npz", type=str)
+    parser.add_argument('--env', help='env', default="Pong-v0", type=str)
     parser.add_argument('--task', help='task to perform',
                         choices=['play', 'eval', 'train', 'dump_video'], default='train')
     parser.add_argument('--output', help='output directory for submission', default='output_dir')
-    parser.add_argument('--episode', help='number of episode to eval', default=100, type=int)
+    parser.add_argument('--episode', help='number of episode to eval', default=1, type=int)
+    parser.add_argument('--render', help='If render the environment', default=False, type=bool)
+    parser.add_argument('--save', help='If save episodes', default=False, type=bool)
+    parser.add_argument('--save_id', help='Index of Batches to be collected', default=1, type=int)
     args = parser.parse_args()
 
     ENV_NAME = args.env
@@ -298,8 +302,9 @@ if __name__ == '__main__':
             input_names=['state'],
             output_names=['policy']))
         if args.task == 'play':
+            filename = "/mnt/research/judy/reward_shaping/expert_data/batch_{}.npz".format(args.save_id)
             play_n_episodes(get_player(train=False), pred,
-                            args.episode, render=True)
+                            args.episode, render=args.render, save=args.save, filename=filename)
         elif args.task == 'eval':
             eval_model_multithread(pred, args.episode, get_player)
         elif args.task == 'dump_video':
