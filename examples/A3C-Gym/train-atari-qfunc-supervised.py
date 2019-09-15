@@ -50,7 +50,7 @@ NUM_ACTIONS = None
 ENV_NAME = None
 LOG_DIRNAME = None
 MODEL_DIRNAME = None 
-EPOCHES = 50
+EPOCHES = 100
 
 dirname = '/mnt/research/judy/reward_shaping/sanity_qfunc_learn/'
 
@@ -299,9 +299,9 @@ def train(args):
     model=SupervisedModel()
     model.build_graph(resume=args.resume)
     # training model using loaded expert data
-    file_ids = find_available_data()
-    N = int( min(10, len(file_ids) * 0.3))
-    file_ids = sorted(file_ids[:N])
+    file_ids = sorted(find_available_data())
+    #N = int( min(10, len(file_ids) * 0.3))
+    #file_ids = file_ids[:N]
     step_file = os.path.join(MODEL_DIRNAME, "step.p")
     if args.resume and os.path.exists(step_file): 
         with open(step_file, 'rb') as f:
@@ -323,7 +323,7 @@ if __name__ == '__main__':
     parser.add_argument('--render', help='If render the environment', default=False, type=bool)
     parser.add_argument('--save', help='If save episodes', default=False, type=bool)
     parser.add_argument('--save_id', help='Index of Batches to be collected', default=1, type=int)
-    parser.add_argument('--resume', help='Resume Model', default=False)
+    parser.add_argument('--resume', help='Resume Model', default=True)
     args = parser.parse_args()
 
     ENV_NAME = args.env
