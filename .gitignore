@@ -93,3 +93,4 @@ tensorpack/libinfo.py
 
 # sshfs specific data
 examples/A3C-Gym/._train*
+*.DS_Store

@@ -67,6 +67,9 @@ class MySimulatorWorker(SimulatorProcess):
     def _build_player(self):
         return get_player(train=True)
 
+class MyRewardShapingSimulatorWorker(RewardShapingSimulatorProcess):
+    def _build_player(self):
+        return get_player(train=True)
 
 class Model(ModelDesc):
     def inputs(self):
@@ -248,7 +251,9 @@ def train():
     prefix = '@' if sys.platform.startswith('linux') else ''
     namec2s = 'ipc://{}sim-c2s-{}'.format(prefix, name_base)
     names2c = 'ipc://{}sim-s2c-{}'.format(prefix, name_base)
-    procs = [MySimulatorWorker(k, namec2s, names2c) for k in range(SIMULATOR_PROC)]
+    #procs = [MySimulatorWorker(k, namec2s, names2c) for k in range(SIMULATOR_PROC)]
+    procs = [MyRewardShapingSimulatorWorker(k, namec2s, names2c) for k in range(SIMULATOR_PROC)]
+    
     ensure_proc_terminate(procs)
     start_proc_mask_signal(procs)
 

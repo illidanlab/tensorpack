@@ -80,7 +80,7 @@ class RewardShapingSimulatorProcess(mp.Process):
                 copy=False)
             action = loads(s2c_socket.recv(copy=False))
             state, reward, isOver, _ = player.step(action)
-            reward += self.rs_sess.run(self.simple_model)
+            reward += self.rs_session.run(self.simple_model)
             if isOver:
                 state = player.reset()
 
