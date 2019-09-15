@@ -12,7 +12,7 @@ from collections import defaultdict
 import six
 import zmq
 from six.moves import queue
-
+import tensorflow as tf
 from tensorpack.utils import logger
 from tensorpack.utils.concurrency import LoopThread, enable_death_signal, ensure_proc_terminate
 from tensorpack.utils.serialize import dumps, loads
@@ -31,6 +31,63 @@ class TransitionExperience(object):
         self.reward = reward
         for k, v in six.iteritems(kwargs):
             setattr(self, k, v)
+
+
+@six.add_metaclass(ABCMeta)
+class RewardShapingSimulatorProcess(mp.Process):
+    """
+    A process that simulates a player and communicates to master to
+    send states, adjusted rewards, and receive the next action.
+    """
+
+    def __init__(self, idx, pipe_c2s, pipe_s2c):
+        """
+        Args:
+            idx: idx of this process
+            pipe_c2s, pipe_s2c (str): name of the pipe
+        """
+        super(SimulatorProcess, self).__init__()
+        self.idx = int(idx)
+        self.name = u'simulator-{}'.format(self.idx)
+        self.identity = self.name.encode('utf-8')
+
+        self.c2s = pipe_c2s
+        self.s2c = pipe_s2c
+        self.rs_session = tf.Session() # create a session
+        self.simple_model = tf.constant([10.0])
+
+    def run(self):
+        enable_death_signal()
+        player = self._build_player()
+        context = zmq.Context()
+        c2s_socket = context.socket(zmq.PUSH)
+        c2s_socket.setsockopt(zmq.IDENTITY, self.identity)
+        c2s_socket.set_hwm(2)
+        c2s_socket.connect(self.c2s)
+
+        s2c_socket = context.socket(zmq.DEALER)
+        s2c_socket.setsockopt(zmq.IDENTITY, self.identity)
+        s2c_socket.connect(self.s2c)
+
+        state = player.reset()
+        reward, isOver = 0, False
+        while True:
+            # after taking the last action, get to this state and get this reward/isOver.
+            # If isOver, get to the next-episode state immediately.
+            # This tuple is not the same as the one put into the memory buffer
+            c2s_socket.send(dumps(
+                (self.identity, state, reward, isOver)),
+                copy=False)
+            action = loads(s2c_socket.recv(copy=False))
+            state, reward, isOver, _ = player.step(action)
+            reward += self.rs_sess.run(self.simple_model)
+            if isOver:
+                state = player.reset()
+
+    @abstractmethod
+    def _build_player(self):
+        pass
+
 
 
 @six.add_metaclass(ABCMeta)

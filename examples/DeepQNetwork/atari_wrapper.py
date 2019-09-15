@@ -4,7 +4,6 @@
 import numpy as np
 from collections import deque
 import gym
-import tensorflow as tf
 
 _v0, _v1 = gym.__version__.split('.')[:2]
 assert int(_v0) > 0 or int(_v1) >= 10, gym.__version__
@@ -24,15 +23,12 @@ class RewardShaping(gym.Wrapper):
         ### logit provider should be a model
         gym.Wrapper.__init__(self, env)
         self.logit_provider = logit_provider
-        self.rs_sess = tf.Session()
-        self.simple_model = tf.constant([10.0])
 
     def step(self, action):
         ob, reward, done, info = self.env.step(action)
         #self.frames.append(ob)
         ## TBD: change reward
         reward += 10
-        reward += self.rs_sess.run(self.simple_model)
         return ob, reward, done, info
 
 

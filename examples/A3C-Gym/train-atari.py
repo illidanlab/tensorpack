@@ -21,7 +21,7 @@ from tensorpack.utils.concurrency import ensure_proc_terminate, start_proc_mask_
 from tensorpack.utils.gpu import get_num_gpu
 from tensorpack.utils.serialize import dumps
 
-from atari_wrapper import FireResetEnv, FrameStack, LimitLength, MapState, RewardShaping
+from atari_wrapper import FireResetEnv, FrameStack, LimitLength, MapState 
 from common import Evaluator, eval_model_multithread, play_n_episodes
 from simulator import SimulatorMaster, SimulatorProcess, TransitionExperience
 
@@ -59,7 +59,7 @@ def get_player(train=False, dumpdir=None):
     env = FrameStack(env, 4)
     if train:
         env = LimitLength(env, 60000)
-    env = RewardShaping(env)
+    #env = RewardShaping(env)
     return env
 
 
