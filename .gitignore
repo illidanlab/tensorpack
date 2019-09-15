@@ -87,3 +87,6 @@ target/
 
 .idea/
 *.diff
+
+# Python setup install
+tensorpack/libinfo.py

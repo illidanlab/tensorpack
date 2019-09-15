@@ -14,6 +14,23 @@ The following wrappers are copied or modified from openai/baselines:
 https://github.com/openai/baselines/blob/master/baselines/common/atari_wrappers.py
 """
 
+class RewardShaping(gym.Wrapper):
+    """
+    When taking a step, add a logit value to the immediate reward,
+    where logits are provied by a pre-trained agent using expert demonstration.
+    """
+    def __init__(self, env, logit_provider=None):
+        ### logit provider should be a model
+        gym.Wrapper.__init__(self, env)
+        self.logit_provider = logit_provider
+
+    def step(self, action):
+        ob, reward, done, info = self.env.step(action)
+        #self.frames.append(ob)
+        ## TBD: change reward
+        reward += 10
+        return ob, reward, done, info
+
 
 class MapState(gym.ObservationWrapper):
     def __init__(self, env, map_func):

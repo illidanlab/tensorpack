@@ -21,7 +21,7 @@ from tensorpack.utils.concurrency import ensure_proc_terminate, start_proc_mask_
 from tensorpack.utils.gpu import get_num_gpu
 from tensorpack.utils.serialize import dumps
 
-from atari_wrapper import FireResetEnv, FrameStack, LimitLength, MapState
+from atari_wrapper import FireResetEnv, FrameStack, LimitLength, MapState, RewardShaping
 from common import Evaluator, eval_model_multithread, play_n_episodes
 from simulator import SimulatorMaster, SimulatorProcess, TransitionExperience
 
@@ -59,6 +59,7 @@ def get_player(train=False, dumpdir=None):
     env = FrameStack(env, 4)
     if train:
         env = LimitLength(env, 60000)
+    env = RewardShaping(env)
     return env
 
 
@@ -276,7 +277,7 @@ def train():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', help='comma separated list of GPU(s) to use.')
-    parser.add_argument('--load', help='load model', default="/mnt/research/judy/reward_shaping/Pong-v0.npz", type=str)
+    parser.add_argument('--load', help='load model', default="/mnt/research/judy/reward_shaping/sanity_qfunc_learn/Pong-v0.npz", type=str)
     parser.add_argument('--env', help='env', default="Pong-v0", type=str)
     parser.add_argument('--task', help='task to perform',
                         choices=['play', 'eval', 'train', 'dump_video'], default='train')
@@ -291,8 +292,9 @@ if __name__ == '__main__':
     NUM_ACTIONS = get_player().action_space.n
     logger.info("Environment: {}, number of actions: {}".format(ENV_NAME, NUM_ACTIONS))
 
-    if args.gpu:
-        os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
+    #if args.gpu:
+    #    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
+    os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
     if args.task != 'train':
         assert args.load is not None

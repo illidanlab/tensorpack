@@ -201,7 +201,11 @@ class SupervisedModel(ModelDesc):
         episode_index = initial_episode
         for epoch in range(epoches):
             for file_id in file_ids:
-                states, actions, rewards = self.load_data(file_id=file_id)
+                try:
+                    states, actions, rewards = self.load_data(file_id=file_id)
+                except AttributeError:
+                    logger.info("Skipping file {}".format(file_id))
+                    continue
                 episodes = len(rewards) # how many episodes are in this file
                 rewards = process_rewards(rewards, episodes=episodes) # get discounted rewards
                 ## start training 
