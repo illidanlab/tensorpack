@@ -222,7 +222,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
 
 def train():
     assert tf.test.is_gpu_available(), "Training requires GPUs!"
-    dirname = os.path.join('/mnt/research/judy/reward_shaping/sanity/', 'train-atari-{}'.format(ENV_NAME))
+    dirname = os.path.join('/mnt/research/judy/reward_shaping/train_from_scratch/', 'train-atari-{}'.format(ENV_NAME))
     logger.set_logger_dir(dirname)
 
     # assign GPUs for training & inference
@@ -277,7 +277,7 @@ def train():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', help='comma separated list of GPU(s) to use.')
-    parser.add_argument('--load', help='load model', default="/mnt/research/judy/reward_shaping/sanity_qfunc_learn/Pong-v0.npz", type=str)
+    parser.add_argument('--load', help='load model', default="/mnt/research/judy/reward_shaping/Pong-v0.npz", type=str)
     parser.add_argument('--env', help='env', default="Pong-v0", type=str)
     parser.add_argument('--task', help='task to perform',
                         choices=['play', 'eval', 'train', 'dump_video'], default='train')
