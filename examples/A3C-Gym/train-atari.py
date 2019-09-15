@@ -23,7 +23,7 @@ from tensorpack.utils.serialize import dumps
 
 from atari_wrapper import FireResetEnv, FrameStack, LimitLength, MapState 
 from common import Evaluator, eval_model_multithread, play_n_episodes
-from simulator import SimulatorMaster, SimulatorProcess, TransitionExperience
+from simulator import SimulatorMaster, SimulatorProcess, RewardShapingSimulatorProcess, TransitionExperience
 
 
 if six.PY3:

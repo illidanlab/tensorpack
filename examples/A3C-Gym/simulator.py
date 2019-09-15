@@ -46,15 +46,23 @@ class RewardShapingSimulatorProcess(mp.Process):
             idx: idx of this process
             pipe_c2s, pipe_s2c (str): name of the pipe
         """
-        super(SimulatorProcess, self).__init__()
+        super(RewardShapingSimulatorProcess, self).__init__()
         self.idx = int(idx)
         self.name = u'simulator-{}'.format(self.idx)
         self.identity = self.name.encode('utf-8')
 
         self.c2s = pipe_c2s
         self.s2c = pipe_s2c
+        #########################
+        # Reward Shaping
+        #########################
+
+        tf.reset_default_graph()
         self.rs_session = tf.Session() # create a session
-        self.simple_model = tf.constant([10.0])
+        self.simple_model = tf.get_variable('xxx', initializer=10.0, trainable=False)
+        init = tf.global_variables_initializer()
+        self.rs_session.run(init)
+        print('Actor model initialized successfully')
 
     def run(self):
         enable_death_signal()
