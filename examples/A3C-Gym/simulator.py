@@ -17,6 +17,7 @@ from tensorpack import *
 from tensorpack.utils import logger
 from tensorpack.utils.concurrency import LoopThread, enable_death_signal, ensure_proc_terminate
 from tensorpack.utils.serialize import dumps, loads
+import numpy as np
 
 __all__ = ['SimulatorProcess', 'SimulatorMaster', 'RewardShapingSimulator',
            'TransitionExperience']
@@ -96,8 +97,6 @@ class RewardShapingSimulator(threading.Thread):
 
     def build_graph(self, STATE_SHAPE, FRAME_HISTORY, NUM_ACTIONS):
 
-        state = tf.placeholder(dtype=tf.uint8, shape= (None,) + STATE_SHAPE + (FRAME_HISTORY, ) )
-        logits = self._build_model(state, STATE_SHAPE, FRAME_HISTORY, NUM_ACTIONS) 
         ## create graph, session
         tf.reset_default_graph()
         self.sess = tf.Session()
@@ -105,6 +104,7 @@ class RewardShapingSimulator(threading.Thread):
 
         logits = self._build_model(state, STATE_SHAPE, FRAME_HISTORY, NUM_ACTIONS)
         policy = tf.nn.softmax(logits, name='policy')
+        ## calcualte the logit get by this action
 
         ## TBD load parameter, or init parameter
         saver = tf.compat.v1.train.Saver()
@@ -113,6 +113,7 @@ class RewardShapingSimulator(threading.Thread):
         print('logit provider model loaded and built successfully')
         results = {}
         results["policy"] = policy
+        results["logits"] = logits
         results["states_ph"] = state
         results["saver"] = saver
         self.handler = results
@@ -140,7 +141,7 @@ class RewardShapingSimulator(threading.Thread):
         logits = FullyConnected('fc-pi', l, NUM_ACTIONS)    # unnormalized policy
         return logits 
 
-    def __init__(self, STATE_SHAPE, FRAME_HISTORY, NUM_ACTIONS, pipe_m2r, pipe_r2m):
+    def __init__(self, STATE_SHAPE, FRAME_HISTORY, NUM_ACTIONS, queue_m2r, queue_r2m):
         """
         Args:
             pipe_c2s, pipe_s2c (str): names of pipe to be used for communication
@@ -151,40 +152,37 @@ class RewardShapingSimulator(threading.Thread):
         self.name = 'RewardShapingSimulator'
         self.build_graph(STATE_SHAPE, FRAME_HISTORY, NUM_ACTIONS)
 
-        self.context = zmq.Context()
-
-        self.m2r_socket = self.context.socket(zmq.PULL) # master to reward-shaper
-        self.m2r_socket.connect(pipe_m2r)
-        self.m2r_socket.set_hwm(2)
-        self.r2m_socket = self.context.socket(zmq.PUSH)
-        self.r2m_socket.connect(pipe_r2m)
-        self.r2m_socket.set_hwm(2)
-
-        # make sure socket get closed at the end
-        def clean_context(soks, context):
-            for s in soks:
-                s.close()
-            context.term()
-        import atexit
-        atexit.register(clean_context, [self.m2r_socket, self.r2m_socket], self.context)
-
+        self.queue_m2r = queue_m2r
+        self.queue_r2m = queue_r2m
 
     def run(self):
         try:
             while True:
                 ## get (s,a ) from master
-                state, action = loads(self.m2r_socket.recv(copy=False))
+                #state, action = loads(self.m2r_socket.recv(copy=False))
+                state, action = self.queue_m2r.get(block=True, timeout=None)
                 ## evalate logit
                 logit = self.predict_logits(state, action)
-                logger.info("Logit is: {}".format(logit))
+                #logger.info("Logit is: {}".format(logit))
                 ## send logit back
-                self.r2m_socket.send(dumps((logit,)), copy=False)
+                self.queue_r2m.put(logit)
+                #self.r2m_socket.send(dumps((logit,)), copy=False)
 
         except zmq.ContextTerminated:
             logger.info("[Simulator] Context was terminated.")
 
     def predict_logits(self, state, action):
-        return 10.0
+        state = np.expand_dims(state, 0)  # batch
+        policy_vec = self.sess.run(
+            [
+                self.handler["policy"],
+            ], 
+            feed_dict={
+                self.handler["states_ph"]:state,
+                }
+                )
+        logit = policy_vec[0][0][action] 
+        return logit
 
 
 @six.add_metaclass(ABCMeta)
@@ -198,7 +196,7 @@ class SimulatorMaster(threading.Thread):
             self.memory = []    # list of Experience
             self.ident = None
 
-    def __init__(self, pipe_c2s, pipe_s2c, reward_shaping=False, pipe_m2r=None, pipe_r2m=None):
+    def __init__(self, pipe_c2s, pipe_s2c, reward_shaping=False, queue_m2r=None, queue_r2m=None):
         """
         Args:
             pipe_c2s, pipe_s2c (str): names of pipe to be used for communication
@@ -219,16 +217,20 @@ class SimulatorMaster(threading.Thread):
         self.s2c_socket.set_hwm(10)
 
         if reward_shaping:
-            if not (pipe_r2m and pipe_r2m):
-                logger.info("Pipes for reward-shaping must be set.")
-                exit(1)
-            self.rs_context = zmq.Context()
-            self.r2m_socket = self.rs_context.socket(zmq.PULL)
-            self.r2m_socket.bind(pipe_r2m)
-            self.r2m_socket.set_hwm(2)
-            self.m2r_socket = self.rs_context.socket(zmq.PUSH)
-            self.m2r_socket.bind(pipe_m2r)
-            self.m2r_socket.set_hwm(2)
+            self.queue_m2r = queue_m2r
+            self.queue_r2m = queue_r2m
+
+        ## if reward_shaping:
+        ##     if not (pipe_r2m and pipe_r2m):
+        ##         logger.info("Pipes for reward-shaping must be set.")
+        ##         exit(1)
+        ##     self.rs_context = zmq.Context()
+        ##     self.r2m_socket = self.rs_context.socket(zmq.PULL)
+        ##     self.r2m_socket.bind(pipe_r2m)
+        ##     self.r2m_socket.set_hwm(2)
+        ##     self.m2r_socket = self.rs_context.socket(zmq.PUSH)
+        ##     self.m2r_socket.bind(pipe_m2r)
+        ##     self.m2r_socket.set_hwm(2)
 
         # queueing messages to client
         self.send_queue = queue.Queue(maxsize=100)
@@ -247,8 +249,8 @@ class SimulatorMaster(threading.Thread):
             context.term()
         import atexit
         atexit.register(clean_context, [self.c2s_socket, self.s2c_socket], self.context)
-        if reward_shaping:
-            atexit.register(clean_context, [self.r2m_socket, self.m2r_socket], self.rs_context)
+        #if reward_shaping:
+        #    atexit.register(clean_context, [self.r2m_socket, self.m2r_socket], self.rs_context)
 
 
     def run(self):
@@ -262,6 +264,8 @@ class SimulatorMaster(threading.Thread):
                     client.ident = ident
                 # maybe check history and warn about dead client?
                 if self.reward_shaping:
+                    self.queue_m2r.put((state, action))
+                    logit = self.queue_r2m.get()
                     #self.m2r_socket.send(dumps((state, action)), copy=False)
                     #logit = loads(self.r2m_socket.recv(copy=False))
                     #logit = 10

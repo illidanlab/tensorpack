@@ -42,7 +42,7 @@ STEPS_PER_EPOCH = 6000
 EVAL_EPISODE = 50
 BATCH_SIZE = 128
 PREDICT_BATCH_SIZE = 16     # batch for efficient forward
-SIMULATOR_PROC = mp.cpu_count() * 2
+SIMULATOR_PROC = 4#mp.cpu_count() * 2
 PREDICTOR_THREAD_PER_GPU = 4
 PREDICTOR_THREAD = None
 
@@ -142,12 +142,12 @@ class Model(ModelDesc):
 
 
 class MySimulatorMaster(SimulatorMaster, Callback):
-    def __init__(self, pipe_c2s, pipe_s2c, gpus, namem2r, namer2m):
+    def __init__(self, pipe_c2s, pipe_s2c, gpus, queue_m2r, queue_r2m):
         """
         Args:
             gpus (list[int]): the gpus used to run inference
         """
-        super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c, reward_shaping=True, pipe_m2r=namer2m, pipe_r2m=namem2r)
+        super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c, reward_shaping=True, queue_m2r=queue_m2r, queue_r2m=queue_r2m)
         self.queue = queue.Queue(maxsize=BATCH_SIZE * 8 * 2)
         self._gpus = gpus
 
@@ -229,12 +229,11 @@ def train():
     dirname = os.path.join('/mnt/research/judy/reward_shaping/sanity_reward_shaping/', 'train-atari-{}'.format(ENV_NAME))
     logger.set_logger_dir(dirname)
 
+    #####################
     # assign GPUs for training & inference
-    num_gpu = get_num_gpu()
-    #####################
-    #### only use 1 GPU 
-    #####################
+    num_gpu = get_num_gpu() - 1
     #num_gpu = 1 
+    #####################
     global PREDICTOR_THREAD
     if num_gpu > 0:
         if num_gpu > 1:
@@ -263,23 +262,19 @@ def train():
     ensure_proc_terminate(procs)
     start_proc_mask_signal(procs)
 
+
+    queue_r2m = queue.Queue(maxsize=2) 
+    queue_m2r = queue.Queue(maxsize=2) 
     #####################
     # setup reward shaper
     #####################
-    namem2r = 'ipc://{}sim-m2r-{}'.format(prefix, name_base) # server to reward shaper
-    namer2m = 'ipc://{}sim-r2m-{}'.format(prefix, name_base) # reward shaper to server
-    reward_shaper = RewardShapingSimulator(STATE_SHAPE, FRAME_HISTORY, NUM_ACTIONS, namem2r, namer2m) 
+    reward_shaper = RewardShapingSimulator(STATE_SHAPE, FRAME_HISTORY, NUM_ACTIONS, queue_m2r, queue_r2m) 
     reward_shaper.start()
-    #print("Hello there ")
-    logger.info("Hello there ")
-    exit()
 
     #####################
     # setup master critic
     #####################
-    rs_send_queue = queue.Queue(maxsize=1) 
-    rs_receiv_queue = queue.Queue(maxsize=1) 
-    master = MySimulatorMaster(namec2s, names2c, predict_tower, namem2r, namer2m)
+    master = MySimulatorMaster(namec2s, names2c, predict_tower, queue_m2r, queue_r2m)
 
 
     config = TrainConfig(
@@ -305,6 +300,9 @@ def train():
 
 
 if __name__ == '__main__':
+    gpu_options = tf.GPUOptions(allow_growth=True)
+    sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', help='comma separated list of GPU(s) to use.')
     parser.add_argument('--load', help='load model', default="/mnt/research/judy/reward_shaping/Pong-v0.npz", type=str)
