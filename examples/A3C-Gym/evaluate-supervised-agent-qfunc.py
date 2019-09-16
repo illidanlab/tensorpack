@@ -118,7 +118,6 @@ class SupervisedModel(ModelDesc):
         q_value = FullyConnected('fc-v', l, 1)
         return logits, q_value
 
-
     def build_graph(self, resume=False):
         ## create graph, session
         tf.reset_default_graph()
@@ -127,22 +126,28 @@ class SupervisedModel(ModelDesc):
         state = tf.placeholder(dtype=tf.uint8, shape= (None,) + STATE_SHAPE + (FRAME_HISTORY, ) )
         futurereward = tf.placeholder(dtype=tf.float32, shape=(None,1))
 
-        logits = self._get_NN_prediction(state)
+        logits, q_value = self._get_NN_prediction(state)
         policy = tf.nn.softmax(logits, name='policy')
         log_probs = tf.log(policy + 1e-6)
         one_hot_actions = tf.one_hot(action, NUM_ACTIONS)
         one_hot_actions = tf.reshape(one_hot_actions, [-1, NUM_ACTIONS])
-        policy_loss = tf.losses.softmax_cross_entropy(
+        xentropy_loss = tf.losses.softmax_cross_entropy(
             one_hot_actions, # one-hot-labels
             logits, # logits
         )
+        value_loss = tf.nn.l2_loss(q_value - futurereward, name='q_value_loss') 
+        entropy_beta = tf.get_variable(
+            'entropy_beta', 
+            shape=[], 
+            initializer=tf.constant_initializer(0.01), 
+            trainable=False
+        )
+        cost = tf.add_n([xentropy_loss * entropy_beta, value_loss])
         confience_a_given_s = tf.reduce_mean(
             tf.reduce_sum(
             policy * one_hot_actions, 1)
         )
-        cost = policy_loss 
 
-        #cost = tf.truediv(cost, tf.cast(tf.shape(futurereward)[0], tf.float32), name='cost')
 
         lr = tf.get_variable('learning_rate', initializer=1e-4, trainable=False)
 
@@ -156,12 +161,18 @@ class SupervisedModel(ModelDesc):
         # optimizer_op = opt.apply_gradients(capped_gvs)
         ########### Add gradient clipping #########
 
-        # Create a summary to monitor cost tensor
+        # Create a summary to monitor cost tensors
         tf.summary.scalar("loss", cost)
+        tf.summary.scalar("cross_entropy_loss", xentropy_loss)
+        tf.summary.scalar("q_value_loss", value_loss)
+
         # Create a summary to monitor confidence tensor
         tf.summary.scalar("mean_pi_a_given_s", confience_a_given_s)
         # Merge all summaries into a single op
         merged = tf.summary.merge_all()
+        # Create a summary to log real future rewards
+        tf.summary.scalar("futurereward", futurereward)
+        
 
         ## TBD load parameter, or init parameter
         saver = tf.compat.v1.train.Saver()
@@ -190,6 +201,8 @@ class SupervisedModel(ModelDesc):
 
         results["optimizer"] = optimizer_op
         results["saver"] = saver
+        results["q_value"] = q_value
+        results["futurereward"] = futurereward
         #self.writer = writer
         #self.optimizer = opt
         #self.actions_ph = action
@@ -197,8 +210,6 @@ class SupervisedModel(ModelDesc):
         #self.states_ph = state
         self.handler = results
         self.sess = sess
-
-
 
 
     def _evaluate_one_episode(self, args):
@@ -225,7 +236,7 @@ class SupervisedModel(ModelDesc):
             ## step with the environment
             ob, r, isOver, info = self.env.step(act)
             if args.render:
-                self.env.render()
+                env.render()
             sum_r += r
             if isOver:
                 return sum_r
