@@ -6,18 +6,18 @@
 import multiprocessing as mp
 import os
 import threading
+import tensorflow as tf
 import time
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
 import six
 import zmq
 from six.moves import queue
-import tensorflow as tf
 from tensorpack.utils import logger
 from tensorpack.utils.concurrency import LoopThread, enable_death_signal, ensure_proc_terminate
 from tensorpack.utils.serialize import dumps, loads
 
-__all__ = ['SimulatorProcess', 'SimulatorMaster',
+__all__ = ['SimulatorProcess', 'SimulatorMaster', 'RewardShapingSimulatorMaster',
            'TransitionExperience']
 
 
@@ -31,70 +31,6 @@ class TransitionExperience(object):
         self.reward = reward
         for k, v in six.iteritems(kwargs):
             setattr(self, k, v)
-
-
-@six.add_metaclass(ABCMeta)
-class RewardShapingSimulatorProcess(mp.Process):
-    """
-    A process that simulates a player and communicates to master to
-    send states, adjusted rewards, and receive the next action.
-    """
-
-    def __init__(self, idx, pipe_c2s, pipe_s2c):
-        """
-        Args:
-            idx: idx of this process
-            pipe_c2s, pipe_s2c (str): name of the pipe
-        """
-        super(RewardShapingSimulatorProcess, self).__init__()
-        self.idx = int(idx)
-        self.name = u'simulator-{}'.format(self.idx)
-        self.identity = self.name.encode('utf-8')
-
-        self.c2s = pipe_c2s
-        self.s2c = pipe_s2c
-        #########################
-        # Reward Shaping
-        #########################
-
-        tf.reset_default_graph()
-        self.rs_session = tf.Session() # create a session
-        self.simple_model = tf.get_variable('xxx', initializer=10.0, trainable=False)
-        init = tf.global_variables_initializer()
-        self.rs_session.run(init)
-        print('Actor model initialized successfully')
-
-    def run(self):
-        enable_death_signal()
-        player = self._build_player()
-        context = zmq.Context()
-        c2s_socket = context.socket(zmq.PUSH)
-        c2s_socket.setsockopt(zmq.IDENTITY, self.identity)
-        c2s_socket.set_hwm(2)
-        c2s_socket.connect(self.c2s)
-
-        s2c_socket = context.socket(zmq.DEALER)
-        s2c_socket.setsockopt(zmq.IDENTITY, self.identity)
-        s2c_socket.connect(self.s2c)
-
-        state = player.reset()
-        reward, isOver = 0, False
-        while True:
-            # after taking the last action, get to this state and get this reward/isOver.
-            # If isOver, get to the next-episode state immediately.
-            # This tuple is not the same as the one put into the memory buffer
-            c2s_socket.send(dumps(
-                (self.identity, state, reward, isOver)),
-                copy=False)
-            action = loads(s2c_socket.recv(copy=False))
-            state, reward, isOver, _ = player.step(action)
-            reward += self.rs_session.run(self.simple_model)
-            if isOver:
-                state = player.reset()
-
-    @abstractmethod
-    def _build_player(self):
-        pass
 
 
 
@@ -149,6 +85,81 @@ class SimulatorProcess(mp.Process):
     @abstractmethod
     def _build_player(self):
         pass
+
+
+
+@six.add_metaclass(ABCMeta)
+class RewardShapingSimulatorMaster(threading.Thread):
+    """ TBD """
+    class ClientState(object):
+        def __init__(self):
+            self.memory = []    # list of Experience
+            self.ident = None
+
+    def __init__(self):
+        """
+        Args:
+            pipe_c2s, pipe_s2c (str): names of pipe to be used for communication
+        """
+        super(RewardShapingSimulatorMaster, self).__init__()
+        assert os.name != 'nt', "Doesn't support windows!"
+        #self.daemon = True
+        self.name = 'RewardShapingSimulatorMaster'
+        self.rs_session = tf.Session()
+        self.tmp = tf.get_variable('tmp', initializer=10, trainable=False)
+        init = tf.global_variables_initializer()
+        self.rs_session.run(init)
+        r = self.rs_session.run(self.tmp)
+        print("From session reward-shaping", r)
+
+        #self.context = zmq.Context()
+
+        #self.c2s_socket = self.context.socket(zmq.PULL)
+        #self.c2s_socket.bind(pipe_c2s)
+        #self.c2s_socket.set_hwm(10)
+        #self.s2c_socket = self.context.socket(zmq.ROUTER)
+        #self.s2c_socket.bind(pipe_s2c)
+        #self.s2c_socket.set_hwm(10)
+
+        ## queueing messages to client
+        #self.send_queue = queue.Queue(maxsize=100)
+
+        #def f():
+        #    msg = self.send_queue.get()
+        #    self.s2c_socket.send_multipart(msg, copy=False)
+        #self.send_thread = LoopThread(f)
+        #self.send_thread.daemon = True
+        #self.send_thread.start()
+
+        # make sure socket get closed at the end
+        #def clean_context(soks, context):
+        #    for s in soks:
+        #        s.close()
+        #    context.term()
+        #import atexit
+        #atexit.register(clean_context, [self.c2s_socket, self.s2c_socket], self.context)
+
+    def run(self):
+        print("From session reward-shaping")
+        #self.clients = defaultdict(self.ClientState)
+        #try:
+        #    while True:
+        #        msg = loads(self.c2s_socket.recv(copy=False))
+        #        ident, state, reward, isOver = msg
+        #        client = self.clients[ident]
+        #        if client.ident is None:
+        #            client.ident = ident
+        #        # maybe check history and warn about dead client?
+        #        self._process_msg(client, state, reward, isOver)
+        #except zmq.ContextTerminated:
+        #    logger.info("[Simulator] Context was terminated.")
+
+    #@abstractmethod
+    #def _process_msg(self, client, state, reward, isOver):
+    #    pass
+
+    #def __del__(self):
+    #    self.context.destroy(linger=0)
 
 
 @six.add_metaclass(ABCMeta)

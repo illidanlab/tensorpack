@@ -23,7 +23,7 @@ from tensorpack.utils.serialize import dumps
 
 from atari_wrapper import FireResetEnv, FrameStack, LimitLength, MapState 
 from common import Evaluator, eval_model_multithread, play_n_episodes
-from simulator import SimulatorMaster, SimulatorProcess, RewardShapingSimulatorProcess, TransitionExperience
+from simulator import SimulatorMaster, SimulatorProcess, RewardShapingSimulatorMaster, TransitionExperience
 
 
 if six.PY3:
@@ -67,9 +67,6 @@ class MySimulatorWorker(SimulatorProcess):
     def _build_player(self):
         return get_player(train=True)
 
-class MyRewardShapingSimulatorWorker(RewardShapingSimulatorProcess):
-    def _build_player(self):
-        return get_player(train=True)
 
 class Model(ModelDesc):
     def inputs(self):
@@ -229,7 +226,8 @@ def train():
     logger.set_logger_dir(dirname)
 
     # assign GPUs for training & inference
-    num_gpu = get_num_gpu()
+    #num_gpu = get_num_gpu()
+    num_gpu = 1 #get_num_gpu()
     global PREDICTOR_THREAD
     if num_gpu > 0:
         if num_gpu > 1:
@@ -251,11 +249,13 @@ def train():
     prefix = '@' if sys.platform.startswith('linux') else ''
     namec2s = 'ipc://{}sim-c2s-{}'.format(prefix, name_base)
     names2c = 'ipc://{}sim-s2c-{}'.format(prefix, name_base)
-    #procs = [MySimulatorWorker(k, namec2s, names2c) for k in range(SIMULATOR_PROC)]
-    procs = [MyRewardShapingSimulatorWorker(k, namec2s, names2c) for k in range(SIMULATOR_PROC)]
+    procs = [MySimulatorWorker(k, namec2s, names2c) for k in range(SIMULATOR_PROC)]
+    #procs = [MyRewardShapingSimulatorWorker(k, namec2s, names2c) for k in range(SIMULATOR_PROC)]
     
     ensure_proc_terminate(procs)
     start_proc_mask_signal(procs)
+
+    reward_shaper = RewardShapingSimulatorMaster() 
 
     master = MySimulatorMaster(namec2s, names2c, predict_tower)
     config = TrainConfig(
@@ -275,7 +275,7 @@ def train():
         session_init=SmartInit(args.load),
         max_epoch=1000,
     )
-    trainer = SimpleTrainer() if num_gpu == 1 else AsyncMultiGPUTrainer(train_tower)
+    trainer = SimpleTrainer() #if num_gpu == 1 else AsyncMultiGPUTrainer(train_tower)
     launch_train_with_config(config, trainer)
 
 
@@ -299,7 +299,6 @@ if __name__ == '__main__':
 
     if args.gpu:
         os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
-    #os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
     if args.task != 'train':
         assert args.load is not None

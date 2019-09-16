@@ -99,4 +99,8 @@ else:
 # These lines will be programatically read/write by setup.py
 # Don't touch them.
 __version__ = '0.9.8'
+<<<<<<< HEAD
 __git_version__ = "v0.9.8-19-g510a050"
+=======
+__git_version__ = "v0.9.8-19-g510a050-dirty"
+>>>>>>> b847304391e3479c6643b8ecb4bd0fc7a9be36dd
