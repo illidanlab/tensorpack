@@ -115,8 +115,7 @@ class SupervisedModel(ModelDesc):
         l = FullyConnected('fc0', l, 512)
         l = PReLU('prelu', l)
         logits = FullyConnected('fc-pi', l, NUM_ACTIONS)    # unnormalized policy
-        q_value = FullyConnected('fc-v', l, 1)
-        return logits, q_value
+        return logits
 
 
     def build_graph(self, resume=False):
