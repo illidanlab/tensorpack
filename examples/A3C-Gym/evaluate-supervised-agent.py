@@ -51,7 +51,7 @@ LOG_DIRNAME = None
 MODEL_DIRNAME = None 
 EPOCHES = 100
 
-dirname = '/mnt/research/judy/reward_shaping/sanity_qfunc_learn/'
+dirname = '/mnt/research/judy/reward_shaping/sanity/'
 
 def process_rewards(rewards, episodes=10):
     discounted_rewards = [] 
@@ -233,7 +233,6 @@ class SupervisedModel(ModelDesc):
     def evaluate(self, args):
         self.env = get_player()
         for episode in range(args.episode):
-            logger.info("Episode {}".format(episode))
             score = self._evaluate_one_episode(args)
             logger.info("Episode {} Player Score: {:.1f}".format(episode, score))
 
