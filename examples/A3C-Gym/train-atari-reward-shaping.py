@@ -23,7 +23,7 @@ from tensorpack.utils.serialize import dumps
 
 from atari_wrapper import FireResetEnv, FrameStack, LimitLength, MapState 
 from common import Evaluator, eval_model_multithread, play_n_episodes
-from simulator import SimulatorMaster, SimulatorProcess, RewardShapingSimulatorMaster, TransitionExperience
+from simulator import SimulatorMaster, SimulatorProcess, RewardShapingSimulator, TransitionExperience
 
 
 if six.PY3:
@@ -39,7 +39,7 @@ STATE_SHAPE = IMAGE_SIZE + (3, )
 
 LOCAL_TIME_MAX = 5
 STEPS_PER_EPOCH = 6000
-EVAL_EPISODE = 10
+EVAL_EPISODE = 50
 BATCH_SIZE = 128
 PREDICT_BATCH_SIZE = 16     # batch for efficient forward
 SIMULATOR_PROC = mp.cpu_count() * 2
@@ -69,6 +69,9 @@ class MySimulatorWorker(SimulatorProcess):
 
 
 class Model(ModelDesc):
+    """
+    Master model for training and predicting
+    """
     def inputs(self):
         assert NUM_ACTIONS is not None
         return [tf.TensorSpec((None,) + STATE_SHAPE + (FRAME_HISTORY, ), tf.uint8, 'state'),
@@ -84,18 +87,18 @@ class Model(ModelDesc):
 
         image = tf.cast(image, tf.float32) / 255.0
         with argscope(Conv2D, activation=tf.nn.relu):
-            l = Conv2D('conv0', image, 32, 5)
-            l = MaxPooling('pool0', l, 2)
-            l = Conv2D('conv1', l, 32, 5)
-            l = MaxPooling('pool1', l, 2)
-            l = Conv2D('conv2', l, 64, 4)
-            l = MaxPooling('pool2', l, 2)
-            l = Conv2D('conv3', l, 64, 3)
+            l = Conv2D('master_conv0', image, 32, 5)
+            l = MaxPooling('master_pool0', l, 2)
+            l = Conv2D('master_conv1', l, 32, 5)
+            l = MaxPooling('master_pool1', l, 2)
+            l = Conv2D('master_conv2', l, 64, 4)
+            l = MaxPooling('master_pool2', l, 2)
+            l = Conv2D('master_conv3', l, 64, 3)
 
-        l = FullyConnected('fc0', l, 512)
-        l = PReLU('prelu', l)
-        logits = FullyConnected('fc-pi', l, NUM_ACTIONS)    # unnormalized policy
-        value = FullyConnected('fc-v', l, 1)
+        l = FullyConnected('master_fc0', l, 512)
+        l = PReLU('master_prelu', l)
+        logits = FullyConnected('master_fc-pi', l, NUM_ACTIONS)    # unnormalized policy
+        value = FullyConnected('master_fc-v', l, 1)
         return logits, value
 
     def build_graph(self, state, action, futurereward, action_prob):
@@ -128,7 +131,7 @@ class Model(ModelDesc):
                                    cost, tf.reduce_mean(importance, name='importance'))
         return cost
 
-    def optimizer(self):
+    def optimizer(self, scope_name="master"):
         lr = tf.get_variable('learning_rate', initializer=0.001, trainable=False)
         opt = tf.train.AdamOptimizer(lr, epsilon=1e-3)
 
@@ -139,12 +142,12 @@ class Model(ModelDesc):
 
 
 class MySimulatorMaster(SimulatorMaster, Callback):
-    def __init__(self, pipe_c2s, pipe_s2c, gpus):
+    def __init__(self, pipe_c2s, pipe_s2c, gpus, namem2r, namer2m):
         """
         Args:
             gpus (list[int]): the gpus used to run inference
         """
-        super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c)
+        super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c, reward_shaping=True, pipe_m2r=namer2m, pipe_r2m=namem2r)
         self.queue = queue.Queue(maxsize=BATCH_SIZE * 8 * 2)
         self._gpus = gpus
 
@@ -198,6 +201,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
         # feed state and return action
         self._on_state(state, client)
 
+
     def _parse_memory(self, init_r, client, isOver):
         mem = client.memory
         if not isOver:
@@ -222,12 +226,15 @@ class MySimulatorMaster(SimulatorMaster, Callback):
 
 def train():
     assert tf.test.is_gpu_available(), "Training requires GPUs!"
-    dirname = os.path.join('/mnt/research/judy/reward_shaping/train_from_scratch/', 'train-atari-{}'.format(ENV_NAME))
+    dirname = os.path.join('/mnt/research/judy/reward_shaping/sanity_reward_shaping/', 'train-atari-{}'.format(ENV_NAME))
     logger.set_logger_dir(dirname)
 
     # assign GPUs for training & inference
-    #num_gpu = get_num_gpu()
-    num_gpu = 1 #get_num_gpu()
+    num_gpu = get_num_gpu()
+    #####################
+    #### only use 1 GPU 
+    #####################
+    #num_gpu = 1 
     global PREDICTOR_THREAD
     if num_gpu > 0:
         if num_gpu > 1:
@@ -244,20 +251,37 @@ def train():
         PREDICTOR_THREAD = 1
         predict_tower, train_tower = [0], [0]
 
-    # setup simulator processes
+    #####################
+    # setup actor process
+    #####################
     name_base = str(uuid.uuid1())[:6]
     prefix = '@' if sys.platform.startswith('linux') else ''
     namec2s = 'ipc://{}sim-c2s-{}'.format(prefix, name_base)
     names2c = 'ipc://{}sim-s2c-{}'.format(prefix, name_base)
     procs = [MySimulatorWorker(k, namec2s, names2c) for k in range(SIMULATOR_PROC)]
-    #procs = [MyRewardShapingSimulatorWorker(k, namec2s, names2c) for k in range(SIMULATOR_PROC)]
     
     ensure_proc_terminate(procs)
     start_proc_mask_signal(procs)
 
-    #reward_shaper = RewardShapingSimulatorMaster() 
+    #####################
+    # setup reward shaper
+    #####################
+    namem2r = 'ipc://{}sim-m2r-{}'.format(prefix, name_base) # server to reward shaper
+    namer2m = 'ipc://{}sim-r2m-{}'.format(prefix, name_base) # reward shaper to server
+    reward_shaper = RewardShapingSimulator(STATE_SHAPE, FRAME_HISTORY, NUM_ACTIONS, namem2r, namer2m) 
+    reward_shaper.start()
+    #print("Hello there ")
+    logger.info("Hello there ")
+    exit()
 
-    master = MySimulatorMaster(namec2s, names2c, predict_tower)
+    #####################
+    # setup master critic
+    #####################
+    rs_send_queue = queue.Queue(maxsize=1) 
+    rs_receiv_queue = queue.Queue(maxsize=1) 
+    master = MySimulatorMaster(namec2s, names2c, predict_tower, namem2r, namer2m)
+
+
     config = TrainConfig(
         model=Model(),
         dataflow=master.get_training_dataflow(),
@@ -268,8 +292,7 @@ def train():
             master,
             PeriodicTrigger(Evaluator(
                 EVAL_EPISODE, ['state'], ['policy'], get_player),
-                #every_k_epochs=1,
-                every_k_steps=1000),
+                every_k_steps=2000),
         ],
         session_creator=sesscreate.NewSessionCreator(config=get_default_sess_config(0.5)),
         steps_per_epoch=STEPS_PER_EPOCH,
@@ -278,6 +301,7 @@ def train():
     )
     trainer = SimpleTrainer() #if num_gpu == 1 else AsyncMultiGPUTrainer(train_tower)
     launch_train_with_config(config, trainer)
+    reward_shaper.close()
 
 
 if __name__ == '__main__':
@@ -292,6 +316,7 @@ if __name__ == '__main__':
     parser.add_argument('--render', help='If render the environment', default=False, type=bool)
     parser.add_argument('--save', help='If save episodes', default=False, type=bool)
     parser.add_argument('--save_id', help='Index of Batches to be collected', default=1, type=int)
+    parser.add_argument("--reward_shaping", help="If to use reward-shaping", default=True)
     args = parser.parse_args()
 
     ENV_NAME = args.env

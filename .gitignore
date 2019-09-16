@@ -95,3 +95,4 @@ tensorpack/libinfo.py
 examples/A3C-Gym/._train*
 *.DS_Store
 *._*.py
+tensorpack/libinfo.py 
