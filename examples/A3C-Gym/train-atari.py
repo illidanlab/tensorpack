@@ -297,9 +297,9 @@ if __name__ == '__main__':
     NUM_ACTIONS = get_player().action_space.n
     logger.info("Environment: {}, number of actions: {}".format(ENV_NAME, NUM_ACTIONS))
 
-    #if args.gpu:
-    #    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
-    os.environ['CUDA_VISIBLE_DEVICES'] = "0"
+    if args.gpu:
+        os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
+    #os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
     if args.task != 'train':
         assert args.load is not None
