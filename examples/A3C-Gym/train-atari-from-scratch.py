@@ -23,7 +23,7 @@ from tensorpack.utils.serialize import dumps
 
 from atari_wrapper import FireResetEnv, FrameStack, LimitLength, MapState 
 from common import Evaluator, eval_model_multithread, play_n_episodes
-from simulator import SimulatorMaster, SimulatorProcess, RewardShapingSimulatorMaster, TransitionExperience
+from simulator import SimulatorMaster, SimulatorProcess, TransitionExperience
 
 
 if six.PY3:
@@ -42,7 +42,7 @@ STEPS_PER_EPOCH = 6000
 EVAL_EPISODE = 10
 BATCH_SIZE = 128
 PREDICT_BATCH_SIZE = 16     # batch for efficient forward
-SIMULATOR_PROC = mp.cpu_count() * 2
+SIMULATOR_PROC = 8#mp.cpu_count() * 2
 PREDICTOR_THREAD_PER_GPU = 4
 PREDICTOR_THREAD = None
 
@@ -139,12 +139,12 @@ class Model(ModelDesc):
 
 
 class MySimulatorMaster(SimulatorMaster, Callback):
-    def __init__(self, pipe_c2s, pipe_s2c, gpus):
+    def __init__(self, pipe_c2s, pipe_s2c, gpus, reward_shaping=False):
         """
         Args:
             gpus (list[int]): the gpus used to run inference
         """
-        super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c)
+        super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c,reward_shaping=reward_shaping)
         self.queue = queue.Queue(maxsize=BATCH_SIZE * 8 * 2)
         self._gpus = gpus
 
@@ -176,19 +176,21 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             assert np.all(np.isfinite(distrib)), distrib
             action = np.random.choice(len(distrib), p=distrib)
             client.memory.append(TransitionExperience(
-                #state, action, reward=None, value=value, prob=distrib[action]))
                 state, action, reward=None, real_reward=None, value=value, prob=distrib[action]))
             self.send_queue.put([client.ident, dumps(action)])
         self.async_predictor.put_task([state], cb)
 
-    def _process_msg(self, client, state, reward, isOver):
+    def _process_msg(self, msg):
         """
         Process a message sent from some client.
         """
         # in the first message, only state is valid,
         # reward&isOver should be discarded
+        client, state, action, reward, isOver = msg
+        real_reward = reward
         if len(client.memory) > 0:
             client.memory[-1].reward = reward
+            client.memory[-1].real_reward = real_reward
             if isOver:
                 # should clear client's memory and put to queue
                 #self._parse_memory(0, client, True)
@@ -196,10 +198,10 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             else:
                 if len(client.memory) == LOCAL_TIME_MAX + 1:
                     R = client.memory[-1].value
-                    #self._parse_memory(R, client, False)
                     self._parse_memory_with_cutoff(R, client, False)
         # feed state and return action
         self._on_state(state, client)
+
 
     def _parse_memory_with_cutoff(self, init_r, client, isOver):
         mem = client.memory
@@ -220,7 +222,6 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             client.memory = [last]
         else:
             client.memory = []
-
 
     def _parse_memory(self, init_r, client, isOver):
         mem = client.memory
@@ -246,7 +247,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
 
 def train():
     assert tf.test.is_gpu_available(), "Training requires GPUs!"
-    dirname = os.path.join('/mnt/research/judy/reward_shaping/train_from_scratch/', 'train-atari-{}'.format(ENV_NAME))
+    dirname = os.path.join('/mnt/research/judy/reward_shaping/sanity_train_from_scratch_cutoff_reward/', 'train-atari-{}'.format(ENV_NAME))
     logger.set_logger_dir(dirname)
 
     # assign GPUs for training & inference
@@ -281,7 +282,7 @@ def train():
 
     #reward_shaper = RewardShapingSimulatorMaster() 
 
-    master = MySimulatorMaster(namec2s, names2c, predict_tower)
+    master = MySimulatorMaster(namec2s, names2c, predict_tower, reward_shaping=True)
     config = TrainConfig(
         model=Model(),
         dataflow=master.get_training_dataflow(),
@@ -293,11 +294,11 @@ def train():
             PeriodicTrigger(Evaluator(
                 EVAL_EPISODE, ['state'], ['policy'], get_player),
                 #every_k_epochs=1,
-                every_k_steps=1000),
+                every_k_steps=2000),
         ],
         session_creator=sesscreate.NewSessionCreator(config=get_default_sess_config(0.5)),
         steps_per_epoch=STEPS_PER_EPOCH,
-        session_init=SmartInit(args.load),
+        #session_init=SmartInit(args.load),
         max_epoch=1000,
     )
     trainer = SimpleTrainer() #if num_gpu == 1 else AsyncMultiGPUTrainer(train_tower)
