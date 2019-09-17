@@ -105,8 +105,6 @@ class Model(ModelDesc):
 
 
     def build_graph(self, state, action, futurereward, action_prob):
-        
-
         logits, value = self._get_NN_prediction(state)
         value = tf.squeeze(value, [1], name='pred_value')  # (B,)
         policy = tf.nn.softmax(logits, name='policy')
@@ -244,7 +242,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
                 }
             ) 
             logit = prob_dist[0][0][action]
-            #logger.info("--" * 20 + str(reward) + "--" * 20)
+            logger.info("--" * 20 + str(logit) + "--" * 20)
             reward += logit
             #logger.info("--" * 20 + str(reward) + "--" * 20)
         else:
