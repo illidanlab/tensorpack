@@ -142,11 +142,6 @@ class SimulatorMaster(threading.Thread):
             context.term()
         import atexit
         atexit.register(clean_context, [self.c2s_socket, self.s2c_socket], self.context)
-        #if reward_shaping:
-        #    FRAME_HISTORY = 4
-        #    IMAGE_SIZE = (84, 84)
-        #    STATE_SHAPE = IMAGE_SIZE + (3, )
-        #    state = tf.placeholder(dtype=tf.uint8, shape= (None,) + STATE_SHAPE + (FRAME_HISTORY, ) )
 
 
     def run(self):

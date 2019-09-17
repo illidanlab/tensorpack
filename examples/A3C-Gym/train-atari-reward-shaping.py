@@ -40,10 +40,10 @@ GAMMA = 0.99
 
 LOCAL_TIME_MAX = 5
 STEPS_PER_EPOCH = 6000
-EVAL_EPISODE = 50
+EVAL_EPISODE = 10
 BATCH_SIZE = 128
 PREDICT_BATCH_SIZE = 16     # batch for efficient forward
-SIMULATOR_PROC = 4#mp.cpu_count() * 2
+SIMULATOR_PROC = 8#mp.cpu_count() * 2
 PREDICTOR_THREAD_PER_GPU = 4
 PREDICTOR_THREAD = None
 
@@ -112,6 +112,9 @@ class Model(ModelDesc):
 
         log_pi_a_given_s = tf.reduce_sum(
             log_probs * tf.one_hot(action, NUM_ACTIONS), 1)
+        ## re-scale futureward
+        ## futurereward = tf.truediv(futurereward, tf.cast(tf.shape(futurereward)[0], tf.float32), name='cost')
+
         advantage = tf.subtract(tf.stop_gradient(value), futurereward, name='advantage')
 
         pi_a_given_s = tf.reduce_sum(policy * tf.one_hot(action, NUM_ACTIONS), 1)  # (B,)
@@ -153,6 +156,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
         self.queue = queue.Queue(maxsize=BATCH_SIZE * 8 * 2)
         self._gpus = gpus
 
+        self.reward_shaping=reward_shaping
         tf.reset_default_graph()
         gpu_options = tf.GPUOptions(allow_growth=True)
         self.sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
@@ -161,7 +165,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
         self.rs_state_ph = state
         ## TBD load parameter, or init parameter
         saver = tf.compat.v1.train.Saver()
-        path = "/mnt/research/judy/reward_shaping/sanity/model_checkpoint"#/checkpoint"
+        path = "/mnt/research/judy/reward_shaping/sanity/model_checkpoint"
         saver.restore(self.sess, tf.train.latest_checkpoint(path))
         logger.info("--" * 20 + "Model loaded successfully." + "--" * 20)
 
@@ -218,7 +222,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             assert np.all(np.isfinite(distrib)), distrib
             action = np.random.choice(len(distrib), p=distrib)
             client.memory.append(TransitionExperience(
-                state, action, reward=None, value=value, prob=distrib[action]))
+                state, action, reward=None, real_reward=None, value=value, prob=distrib[action]))
             self.send_queue.put([client.ident, dumps(action)])
         self.async_predictor.put_task([state], cb)
 
@@ -231,9 +235,10 @@ class MySimulatorMaster(SimulatorMaster, Callback):
         #################### 
         # reward shaping
         #################### 
-        if len(msg) == 4:
+        if not self.reward_shaping:
             client, state, reward, isOver = msg
-        elif len(msg) == 5: # reward_shaping
+            real_reward = reward
+        else:
             client, state, action, reward, isOver = msg
             prob_dist = self.sess.run(
                 [self.rs_prob_dist],
@@ -242,26 +247,45 @@ class MySimulatorMaster(SimulatorMaster, Callback):
                 }
             ) 
             logit = prob_dist[0][0][action]
-            logger.info("--" * 20 + str(logit) + "--" * 20)
+            real_reward = reward
             reward += logit
-            #logger.info("--" * 20 + str(reward) + "--" * 20)
-        else:
-            logger.error("Unknown message.")
 
         if len(client.memory) > 0:
             client.memory[-1].reward = reward
-
+            client.memory[-1].real_reward = real_reward
 
             if isOver:
                 # should clear client's memory and put to queue
-                self._parse_memory(0, client, True)
+                self._parse_memory_with_cutoff(0, client, True)
+                #self._parse_memory(0, client, True)
             else:
                 if len(client.memory) == LOCAL_TIME_MAX + 1:
                     R = client.memory[-1].value
-                    self._parse_memory(R, client, False)
+                    self._parse_memory_with_cutoff(R, client, False)
+                    #self._parse_memory(R, client, False)
         # feed state and return action
         self._on_state(state, client)
 
+
+    def _parse_memory_with_cutoff(self, init_r, client, isOver):
+        mem = client.memory
+        if not isOver:
+            last = mem[-1]
+            mem = mem[:-1]
+
+        mem.reverse()
+        R = float(init_r)
+        for idx, k in enumerate(mem):
+            if k.real_reward != 0: # we get one win/loss, stop counting future reward 
+                R = np.clip(k.reward, -1, 1)
+            else: # it's not ending yet
+                R = np.clip(k.reward, -1, 1) + GAMMA * R
+            self.queue.put([k.state, k.action, R, k.prob])
+
+        if not isOver:
+            client.memory = [last]
+        else:
+            client.memory = []
 
     def _parse_memory(self, init_r, client, isOver):
         mem = client.memory
@@ -338,7 +362,7 @@ def train():
         ],
         session_creator=sesscreate.NewSessionCreator(config=get_default_sess_config(0.5)),
         steps_per_epoch=STEPS_PER_EPOCH,
-        #session_init=SmartInit("/mnt/research/judy/reward_shaping/sanity/model_checkpoint/checkpoint"),
+        session_init=SmartInit("/mnt/research/judy/reward_shaping/sanity/model_checkpoint/checkpoint"),
         max_epoch=1000,
     )
     trainer = SimpleTrainer() #if num_gpu == 1 else AsyncMultiGPUTrainer(train_tower)
