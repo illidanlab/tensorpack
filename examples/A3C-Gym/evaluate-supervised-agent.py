@@ -110,23 +110,26 @@ class SupervisedModel(ModelDesc):
             l = MaxPooling('pool1', l, 2)
             l = Conv2D('conv2', l, 64, 4)
             l = MaxPooling('pool2', l, 2)
-            l = Conv2D('conv3', l, 64, 3)
+            l2 = Conv2D('conv3', l, 64, 3)
 
-        l = FullyConnected('fc0', l, 512)
+        print_op = tf.Print(l2, [l2])
+        #, [tf.shape(l2), l2], l2.name)
+        l = FullyConnected('fc0', l2, 512)
         l = PReLU('prelu', l)
         logits = FullyConnected('fc-pi', l, NUM_ACTIONS)    # unnormalized policy
-        return logits
+        return logits, print_op
 
 
     def build_graph(self, resume=False):
         ## create graph, session
+        logger.info("Graph built ...............")
         tf.reset_default_graph()
         sess = tf.Session()
         action = tf.placeholder(dtype=tf.int64, shape=(None,1))
         state = tf.placeholder(dtype=tf.uint8, shape= (None,) + STATE_SHAPE + (FRAME_HISTORY, ) )
         futurereward = tf.placeholder(dtype=tf.float32, shape=(None,1))
 
-        logits = self._get_NN_prediction(state)
+        logits, print_op = self._get_NN_prediction(state)
         policy = tf.nn.softmax(logits, name='policy')
         log_probs = tf.log(policy + 1e-6)
         one_hot_actions = tf.one_hot(action, NUM_ACTIONS)
@@ -168,6 +171,7 @@ class SupervisedModel(ModelDesc):
             print('loading and building pretrained policy')
             saver.restore(sess, tf.train.latest_checkpoint(MODEL_DIRNAME))
             print('loaded and built successfully')
+
         else:
             init = tf.global_variables_initializer()
             sess.run(init)
@@ -189,6 +193,7 @@ class SupervisedModel(ModelDesc):
 
         results["optimizer"] = optimizer_op
         results["saver"] = saver
+        results["print_op"] = print_op
         #self.writer = writer
         #self.optimizer = opt
         #self.actions_ph = action
@@ -227,6 +232,15 @@ class SupervisedModel(ModelDesc):
                 self.env.render()
             sum_r += r
             if isOver:
+                #ob = np.expand_dims(ob, 0)  # batch
+                #self.sess.run(
+                #    [
+                #        self.handler["print_op"]
+                #    ], 
+                #    feed_dict={
+                #        self.handler["states_ph"]:ob,
+                #    }
+                #)
                 return sum_r
 
 
