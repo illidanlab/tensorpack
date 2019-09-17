@@ -39,7 +39,7 @@ STATE_SHAPE = IMAGE_SIZE + (3, )
 GAMMA = 0.99
 
 LOCAL_TIME_MAX = 5
-STEPS_PER_EPOCH = 6000
+STEPS_PER_EPOCH = 2000
 EVAL_EPISODE = 10
 BATCH_SIZE = 128
 PREDICT_BATCH_SIZE = 16     # batch for efficient forward
@@ -105,6 +105,8 @@ class Model(ModelDesc):
 
 
     def build_graph(self, state, action, futurereward, action_prob):
+        
+        
         logits, value = self._get_NN_prediction(state)
         value = tf.squeeze(value, [1], name='pred_value')  # (B,)
         policy = tf.nn.softmax(logits, name='policy')
@@ -123,16 +125,19 @@ class Model(ModelDesc):
         policy_loss = tf.reduce_sum(log_pi_a_given_s * advantage * importance, name='policy_loss')
         xentropy_loss = tf.reduce_sum(policy * log_probs, name='xentropy_loss')
         value_loss = tf.nn.l2_loss(value - futurereward, name='value_loss')
+        value_beta = tf.get_variable('value_beta', shape=[],
+                                       initializer=tf.constant_initializer(0.01), trainable=False)
 
         pred_reward = tf.reduce_mean(value, name='predict_reward')
         advantage = tf.sqrt(tf.reduce_mean(tf.square(advantage)), name='rms_advantage')
         entropy_beta = tf.get_variable('entropy_beta', shape=[],
                                        initializer=tf.constant_initializer(0.01), trainable=False)
-        cost = tf.add_n([policy_loss, xentropy_loss * entropy_beta, value_loss])
+        cost = tf.add_n([policy_loss, xentropy_loss * entropy_beta, value_loss * value_beta])
         cost = tf.truediv(cost, tf.cast(tf.shape(futurereward)[0], tf.float32), name='cost')
+        avg_futurereward = tf.reduce_mean(futurereward, name='avg_futurereward')
         summary.add_moving_summary(policy_loss, xentropy_loss,
                                    value_loss, pred_reward, advantage,
-                                   cost, tf.reduce_mean(importance, name='importance'))
+                                   cost, avg_futurereward, tf.reduce_mean(importance, name='importance'))
         return cost
         
 
@@ -248,6 +253,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             ) 
             logit = prob_dist[0][0][action]
             real_reward = reward
+            #reward += 1e-2 * logit
             reward += logit
 
         if len(client.memory) > 0:
@@ -316,8 +322,8 @@ def train():
 
     #####################
     # assign GPUs for training & inference
-    num_gpu = get_num_gpu() - 1
-    #num_gpu = 1 
+    #num_gpu = get_num_gpu() - 1
+    num_gpu = 1 
     #####################
     global PREDICTOR_THREAD
     if num_gpu > 0:
