@@ -281,7 +281,8 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             #### DEBUG: replace action with pretrained-policy output
             logit = prob_dist[0][0][action]
             action = np.argmax(prob_dist[0][0])
-            real_reward = reward = logit
+            real_reward = reward
+            reward += logit
 
         if len(client.memory) > 0:
             client.memory[-1].reward = reward
