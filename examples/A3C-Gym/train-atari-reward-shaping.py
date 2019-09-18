@@ -295,7 +295,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
 
 def train():
     assert tf.test.is_gpu_available(), "Training requires GPUs!"
-    dirname = os.path.join('/mnt/research/judy/reward_shaping/sanity_reward_shaping/', 'debug1-train-atari-{}'.format(ENV_NAME))
+    dirname = os.path.join('/mnt/research/judy/reward_shaping/sanity_reward_shaping/', 'train-atari-{}'.format(ENV_NAME))
     logger.set_logger_dir(dirname)
 
     #####################
