@@ -20,9 +20,8 @@ from tensorpack.tfutils.gradproc import MapGradient, SummaryGradient
 from tensorpack.utils.concurrency import ensure_proc_terminate, start_proc_mask_signal
 from tensorpack.utils.gpu import get_num_gpu
 from tensorpack.utils.serialize import dumps
-from tensorflow.python.tools import inspect_checkpoint as chkp
 
-from atari_wrapper import FireResetEnv, FrameStack, LimitLength, MapState
+from atari_wrapper import FireResetEnv, FrameStack, LimitLength, MapState 
 from common import Evaluator, eval_model_multithread, play_n_episodes
 from simulator import SimulatorMaster, SimulatorProcess, TransitionExperience
 
@@ -33,10 +32,10 @@ if six.PY3:
 else:
     CancelledError = Exception
 
-FRAME_HISTORY = 4
 IMAGE_SIZE = (84, 84)
-STATE_SHAPE = IMAGE_SIZE + (3, )
+FRAME_HISTORY = 4
 GAMMA = 0.99
+STATE_SHAPE = IMAGE_SIZE + (3, )
 
 LOCAL_TIME_MAX = 5
 STEPS_PER_EPOCH = 2000
@@ -49,7 +48,6 @@ PREDICTOR_THREAD = None
 
 NUM_ACTIONS = None
 ENV_NAME = None
-model = None
 
 
 def get_player(train=False, dumpdir=None):
@@ -71,9 +69,6 @@ class MySimulatorWorker(SimulatorProcess):
 
 
 class Model(ModelDesc):
-    """
-    Master model for training and predicting
-    """
     def inputs(self):
         assert NUM_ACTIONS is not None
         return [tf.TensorSpec((None,) + STATE_SHAPE + (FRAME_HISTORY, ), tf.uint8, 'state'),
@@ -97,50 +92,69 @@ class Model(ModelDesc):
             l = MaxPooling('master-pool2', l, 2)
             l = Conv2D('master-conv3', l, 64, 3)
 
+            l2 = Conv2D('conv0', image, 32, 5)
+            l2 = MaxPooling('pool0', l2, 2)
+            l2 = Conv2D('conv1', l2, 32, 5)
+            l2 = MaxPooling('pool1', l2, 2)
+            l2 = Conv2D('conv2', l2, 64, 4)
+            l2 = MaxPooling('pool2', l2, 2)
+            l2 = Conv2D('conv3', l2, 64, 3)
+
         l = FullyConnected('master-fc0', l, 512)
         l = PReLU('master-prelu', l)
         logits = FullyConnected('master-fc-pi', l, NUM_ACTIONS)    # unnormalized policy
         value = FullyConnected('master-fc-v', l, 1)
-        return logits, value
 
+        l2 = FullyConnected('fc0', l2, 512)
+        l2 = PReLU('prelu', l2)
+        reward_shaping_logits = FullyConnected('fc-pi', l2, NUM_ACTIONS)    # unnormalized policy
+        print(tf.shape(reward_shaping_logits), NUM_ACTIONS)
+        print(tf.shape(logits), NUM_ACTIONS)
+        return logits, reward_shaping_logits, value
 
     def build_graph(self, state, action, futurereward, action_prob):
-        logits, value = self._get_NN_prediction(state)
+        logits, reward_shaping_logits, value = self._get_NN_prediction(state)
+        #print(tf.shape(reward_shaping_logits), NUM_ACTIONS)
+        reward_shaping_logits = tf.nn.softmax(reward_shaping_logits)
+        reward_shaping_logits = tf.stop_gradient(reward_shaping_logits, name='reward_logits')
+        
+        #reward_shaping_logit_a_given_s = tf.reduce_sum(
+        #    reward_shaping_logits * tf.one_hot(action, NUM_ACTIONS), 
+        #    1, 
+        #    name='reward_shaping_logit_a_given_s') 
+        #print(tf.shape(reward_shaping_logit_a_given_s))
+           
         value = tf.squeeze(value, [1], name='pred_value')  # (B,)
         policy = tf.nn.softmax(logits, name='policy')
-        log_probs = tf.log(policy + 1e-6)
+        if not self.training:
+            return
 
+        log_probs = tf.log(policy + 1e-6)
         log_pi_a_given_s = tf.reduce_sum(
             log_probs * tf.one_hot(action, NUM_ACTIONS), 1)
-
         advantage = tf.subtract(tf.stop_gradient(value), futurereward, name='advantage')
+        avg_futurereward = tf.reduce_mean(futurereward, name='avg_futurereward')
 
-        pi_a_given_s = tf.reduce_sum(policy * tf.one_hot(action, NUM_ACTIONS), 1)  # (B,)
+        pi_a_given_s = tf.reduce_sum(policy * tf.one_hot(action, NUM_ACTIONS), 1) 
         importance = tf.stop_gradient(tf.clip_by_value(pi_a_given_s / (action_prob + 1e-8), 0, 10))
 
         policy_loss = tf.reduce_sum(log_pi_a_given_s * advantage * importance, name='policy_loss')
         xentropy_loss = tf.reduce_sum(policy * log_probs, name='xentropy_loss')
         value_loss = tf.nn.l2_loss(value - futurereward, name='value_loss')
-        value_beta = tf.get_variable('value_beta', shape=[],
-                                       initializer=tf.constant_initializer(0.001), trainable=False)
 
         pred_reward = tf.reduce_mean(value, name='predict_reward')
         advantage = tf.sqrt(tf.reduce_mean(tf.square(advantage)), name='rms_advantage')
         entropy_beta = tf.get_variable('entropy_beta', shape=[],
                                        initializer=tf.constant_initializer(0.01), trainable=False)
-        cost = tf.add_n([policy_loss, xentropy_loss * entropy_beta, value_loss * value_beta])
-        #cost = tf.add_n([policy_loss, xentropy_loss * entropy_beta])
-
+        cost = tf.add_n([policy_loss, xentropy_loss * entropy_beta, value_loss])
         cost = tf.truediv(cost, tf.cast(tf.shape(futurereward)[0], tf.float32), name='cost')
-        avg_futurereward = tf.reduce_mean(futurereward, name='avg_futurereward')
-        summary.add_moving_summary(policy_loss, xentropy_loss,
-                                   value_loss, 
-                                   pred_reward, advantage,
-                                   cost, avg_futurereward, tf.reduce_mean(importance, name='importance'))
+        summary.add_moving_summary(policy_loss, xentropy_loss, avg_futurereward,
+                                   value_loss, pred_reward, advantage,
+                                   #reward_shaping_logit_a_given_s,
+                                   cost, tf.reduce_mean(importance, name='importance'))
         return cost
 
-
-    def optimizer(self, scope_name="master"):
+    def optimizer(self):
         lr = tf.get_variable('learning_rate', initializer=0.001, trainable=False)
         opt = tf.train.AdamOptimizer(lr, epsilon=1e-3)
 
@@ -151,58 +165,20 @@ class Model(ModelDesc):
 
 
 class MySimulatorMaster(SimulatorMaster, Callback):
-    def __init__(self, pipe_c2s, pipe_s2c, gpus, reward_shaping=False):
+    def __init__(self, pipe_c2s, pipe_s2c, gpus, reward_shaping=True):
         """
         Args:
             gpus (list[int]): the gpus used to run inference
         """
-        super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c, reward_shaping=reward_shaping)
+        super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c,reward_shaping=reward_shaping)
         self.queue = queue.Queue(maxsize=BATCH_SIZE * 8 * 2)
         self._gpus = gpus
-
-        self.reward_shaping=reward_shaping
-        tf.reset_default_graph()
-        gpu_options = tf.GPUOptions(allow_growth=True)
-        self.sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
-        state = tf.placeholder(dtype=tf.uint8, shape= (None,) + STATE_SHAPE + (FRAME_HISTORY, ) )
-        self.rs_prob_dist = self._get_pretrained_module(state, STATE_SHAPE, FRAME_HISTORY)
-        self.rs_state_ph = state
-        ## TBD load parameter, or init parameter
-        saver = tf.compat.v1.train.Saver()
-        path = "/mnt/research/judy/reward_shaping/sanity/model_checkpoint"
-        saver.restore(self.sess, tf.train.latest_checkpoint(path))
-        logger.info("--" * 20 + "Model loaded successfully." + "--" * 20)
-
-
-    def _get_pretrained_module(self, state, STATE_SHAPE, FRAME_HISTORY, NUM_ACTIONS=6):
-        assert state.shape.rank == 5  # Batch, H, W, Channel, History
-        state = tf.transpose(state, [0, 1, 2, 4, 3])  # swap channel & history, to be compatible with old models
-        image = tf.reshape(state, [-1] + list(STATE_SHAPE[:2]) + [STATE_SHAPE[2] * FRAME_HISTORY])
-
-        image = tf.cast(image, tf.float32) / 255.0
-
-
-        with argscope(Conv2D, activation=tf.nn.relu):
-            l = Conv2D('conv0', image, 32, 5)
-            l = MaxPooling('pool0', l, 2)
-            l = Conv2D('conv1', l, 32, 5)
-            l = MaxPooling('pool1', l, 2)
-            l = Conv2D('conv2', l, 64, 4)
-            l = MaxPooling('pool2', l, 2)
-            l = Conv2D('conv3', l, 64, 3)
-
-        l = FullyConnected('fc0', l, 512)
-        l = PReLU('prelu', l)
-        logits = FullyConnected('fc-pi', l, NUM_ACTIONS)    # unnormalized policy
-        logits = tf.nn.softmax(logits)
-        logits = tf.stop_gradient(logits)
-        return logits
 
     def _setup_graph(self):
         # Create predictors on the available predictor GPUs.
         num_gpu = len(self._gpus)
         predictors = [self.trainer.get_predictor(
-            ['state'], ['policy', 'pred_value'],
+            ['state'], ['policy', 'pred_value', 'reward_logits'],
             self._gpus[k % num_gpu])
             for k in range(PREDICTOR_THREAD)]
         self.async_predictor = MultiThreadAsyncPredictor(
@@ -219,28 +195,18 @@ class MySimulatorMaster(SimulatorMaster, Callback):
         """
         def cb(outputs):
             try:
-                distrib, value = outputs.result()
+                distrib, value, rs_distrib = outputs.result()
             except CancelledError:
                 logger.info("Client {} cancelled.".format(client.ident))
                 return
             assert np.all(np.isfinite(distrib)), distrib
-            action = np.random.choice(len(distrib), p=distrib)
+            #action = np.random.choice(len(distrib), p=distrib)
+            ########################################################
+            action = np.random.choice(len(rs_distrib), p=rs_distrib)
+            ########################################################
             client.memory.append(TransitionExperience(
-                state, action, reward=None, real_reward=None, value=value, prob=distrib[action]))
-
-            ##### DEBUG: replace action with pretrained-policy output
-            #prob_dist = self.sess.run(
-            #    [self.rs_prob_dist],
-            #    feed_dict={
-            #        self.rs_state_ph : np.expand_dims(state, 0)
-            #    }
-            #)
-            ##action = np.random.choice(len(prob_dist), p=prob_dist)
-            #action = np.argmax(prob_dist[0][0])
-            #client.memory.append(TransitionExperience(
-            #    state, action, reward=None, real_reward=None, value=0, prob=1))
-
-
+                state, action, reward=None, value=value, prob=rs_distrib[action], add_logit=rs_distrib[action]))
+                #state, action, reward=None, value=value, prob=distrib[action], add_logit=rs_distrib[action]))
             self.send_queue.put([client.ident, dumps(action)])
         self.async_predictor.put_task([state], cb)
 
@@ -250,43 +216,9 @@ class MySimulatorMaster(SimulatorMaster, Callback):
         """
         # in the first message, only state is valid,
         # reward&isOver should be discarded
-        ####################
-        # reward shaping
-        ####################
-
-        #var = [v for v in tf.trainable_variables()]
-        #print(var)
-        #var = list(tf.get_collection(tf.GraphKeys.LOCAL_VARIABLES))##]
-        #var_names = [v.name for v in var ]
-        #var = tf.get_variable("conv0/W")
-        #layer = tf.reduce_sum(var)
-        #layer_weight_sum = model.sess.run(layer)
-        #print(layer_weight_sum)
-        #for v in tf.get_default_graph().as_graph_def().node:
-        #    print(v.name)
-
-
-
-        if not self.reward_shaping:
-            client, state, reward, isOver = msg
-            real_reward = reward
-        else:
-            client, state, action, reward, isOver = msg
-            prob_dist = self.sess.run(
-                [self.rs_prob_dist],
-                feed_dict={
-                    self.rs_state_ph : np.expand_dims(state, 0)
-                }
-            )
-            #### DEBUG: replace action with pretrained-policy output
-            logit = prob_dist[0][0][action]
-            action = np.argmax(prob_dist[0][0])
-            real_reward = reward = logit
-
+        client, state, action, reward, isOver = msg
         if len(client.memory) > 0:
             client.memory[-1].reward = reward
-            client.memory[-1].real_reward = real_reward
-
             if isOver:
                 # should clear client's memory and put to queue
                 self._parse_memory_with_cutoff(0, client, True)
@@ -307,12 +239,11 @@ class MySimulatorMaster(SimulatorMaster, Callback):
         mem.reverse()
         R = float(init_r)
         for idx, k in enumerate(mem):
-            if k.real_reward != 0: # we get one win/loss, stop counting future reward
-                #logger.info("Real reward is : {}".format(k.real_reward))
-                R = np.clip(k.reward, -1, 1)
+            #logit2add = k.add_logit
+            if k.reward != 0: # we get one win/loss, stop counting future reward 
+                R = np.clip(k.reward , -1, 1)
             else: # it's not ending yet
-                R = np.clip(k.reward, -1, 1) + GAMMA * R
-            #logger.info(R)
+                R = np.clip(k.reward , -1, 1) + GAMMA * R
             self.queue.put([k.state, k.action, R, k.prob])
 
         if not isOver:
@@ -344,14 +275,12 @@ class MySimulatorMaster(SimulatorMaster, Callback):
 
 def train():
     assert tf.test.is_gpu_available(), "Training requires GPUs!"
-    dirname = os.path.join('/mnt/research/judy/reward_shaping/sanity_reward_shaping/', 'debug1-train-atari-{}'.format(ENV_NAME))
+    dirname = os.path.join('/mnt/research/judy/reward_shaping/sanity_train_from_scratch_cutoff_reward/', 'version3-train-atari-{}'.format(ENV_NAME))
     logger.set_logger_dir(dirname)
 
-    #####################
     # assign GPUs for training & inference
-    #num_gpu = get_num_gpu() - 1
-    num_gpu = 1
-    #####################
+    #num_gpu = get_num_gpu()
+    num_gpu = 1 #get_num_gpu()
     global PREDICTOR_THREAD
     if num_gpu > 0:
         if num_gpu > 1:
@@ -368,21 +297,22 @@ def train():
         PREDICTOR_THREAD = 1
         predict_tower, train_tower = [0], [0]
 
-    #####################
-    # setup actor process
-    #####################
+    # setup simulator processes
     name_base = str(uuid.uuid1())[:6]
     prefix = '@' if sys.platform.startswith('linux') else ''
     namec2s = 'ipc://{}sim-c2s-{}'.format(prefix, name_base)
     names2c = 'ipc://{}sim-s2c-{}'.format(prefix, name_base)
     procs = [MySimulatorWorker(k, namec2s, names2c) for k in range(SIMULATOR_PROC)]
-
+    #procs = [MyRewardShapingSimulatorWorker(k, namec2s, names2c) for k in range(SIMULATOR_PROC)]
+    
     ensure_proc_terminate(procs)
     start_proc_mask_signal(procs)
+
+    #reward_shaper = RewardShapingSimulatorMaster() 
+
     master = MySimulatorMaster(namec2s, names2c, predict_tower, reward_shaping=True)
-    model = Model()
     config = TrainConfig(
-        model=model,
+        model=Model(),
         dataflow=master.get_training_dataflow(),
         callbacks=[
             ModelSaver(),
@@ -390,7 +320,8 @@ def train():
             ScheduledHyperParamSetter('entropy_beta', [(80, 0.005)]),
             master,
             PeriodicTrigger(Evaluator(
-                EVAL_EPISODE, ['state'], ['policy'], get_player),
+                EVAL_EPISODE, ['state'], ['reward_logits'], get_player),
+                #every_k_epochs=1,
                 every_k_steps=2000),
         ],
         session_creator=sesscreate.NewSessionCreator(config=get_default_sess_config(0.5)),
@@ -399,21 +330,10 @@ def train():
         max_epoch=1000,
     )
     trainer = SimpleTrainer() #if num_gpu == 1 else AsyncMultiGPUTrainer(train_tower)
-
-    #var = [v for v in tf.trainable_variables()]
-    #var_names = [v.name for v in var ]
-    #print(var_names)
-    #layer = tf.reduce_sum(var[0])
-    #print(var[0].name)
-    #layer_weight_sum = model.sess.run(layer)
-    #print(layer_weight_sum)
-    
     launch_train_with_config(config, trainer)
 
 
-
 if __name__ == '__main__':
-
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', help='comma separated list of GPU(s) to use.')
     parser.add_argument('--load', help='load model', default="/mnt/research/judy/reward_shaping/Pong-v0.npz", type=str)
@@ -425,7 +345,6 @@ if __name__ == '__main__':
     parser.add_argument('--render', help='If render the environment', default=False, type=bool)
     parser.add_argument('--save', help='If save episodes', default=False, type=bool)
     parser.add_argument('--save_id', help='Index of Batches to be collected', default=1, type=int)
-    parser.add_argument("--reward_shaping", help="If to use reward-shaping", default=True)
     args = parser.parse_args()
 
     ENV_NAME = args.env

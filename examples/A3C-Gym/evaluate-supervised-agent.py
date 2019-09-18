@@ -332,6 +332,14 @@ def evaluate(args):
     # setup model 
     model=SupervisedModel()
     model.build_graph(resume=True)
+
+    #var = [v for v in tf.trainable_variables()]
+    #var_names = [v.name for v in var ]
+    #layer = tf.reduce_sum(var[0])
+    #print(var[0].name)
+    #layer_weight_sum = model.sess.run(layer)
+    #print(layer_weight_sum)
+
     model.evaluate(args)
 
 

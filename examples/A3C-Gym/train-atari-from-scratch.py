@@ -109,6 +109,7 @@ class Model(ModelDesc):
         log_pi_a_given_s = tf.reduce_sum(
             log_probs * tf.one_hot(action, NUM_ACTIONS), 1)
         advantage = tf.subtract(tf.stop_gradient(value), futurereward, name='advantage')
+        avg_futurereward = tf.reduce_mean(futurereward, name='avg_futurereward')
 
         pi_a_given_s = tf.reduce_sum(policy * tf.one_hot(action, NUM_ACTIONS), 1)  # (B,)
         importance = tf.stop_gradient(tf.clip_by_value(pi_a_given_s / (action_prob + 1e-8), 0, 10))
@@ -123,7 +124,7 @@ class Model(ModelDesc):
                                        initializer=tf.constant_initializer(0.01), trainable=False)
         cost = tf.add_n([policy_loss, xentropy_loss * entropy_beta, value_loss])
         cost = tf.truediv(cost, tf.cast(tf.shape(futurereward)[0], tf.float32), name='cost')
-        summary.add_moving_summary(policy_loss, xentropy_loss,
+        summary.add_moving_summary(policy_loss, xentropy_loss, avg_futurereward,
                                    value_loss, pred_reward, advantage,
                                    cost, tf.reduce_mean(importance, name='importance'))
         return cost
@@ -247,7 +248,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
 
 def train():
     assert tf.test.is_gpu_available(), "Training requires GPUs!"
-    dirname = os.path.join('/mnt/research/judy/reward_shaping/sanity_train_from_scratch_cutoff_reward/', 'train-atari-{}'.format(ENV_NAME))
+    dirname = os.path.join('/mnt/research/judy/reward_shaping/sanity_train_from_scratch_cutoff_reward/', 'debug1-train-atari-{}'.format(ENV_NAME))
     logger.set_logger_dir(dirname)
 
     # assign GPUs for training & inference
@@ -298,7 +299,7 @@ def train():
         ],
         session_creator=sesscreate.NewSessionCreator(config=get_default_sess_config(0.5)),
         steps_per_epoch=STEPS_PER_EPOCH,
-        #session_init=SmartInit(args.load),
+        session_init=SmartInit("/mnt/research/judy/reward_shaping/sanity/model_checkpoint/checkpoint"),
         max_epoch=1000,
     )
     trainer = SimpleTrainer() #if num_gpu == 1 else AsyncMultiGPUTrainer(train_tower)
