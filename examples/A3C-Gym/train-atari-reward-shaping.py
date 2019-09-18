@@ -228,19 +228,6 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             client.memory.append(TransitionExperience(
                 state, action, reward=None, real_reward=None, value=value, prob=distrib[action]))
 
-            ##### DEBUG: replace action with pretrained-policy output
-            #prob_dist = self.sess.run(
-            #    [self.rs_prob_dist],
-            #    feed_dict={
-            #        self.rs_state_ph : np.expand_dims(state, 0)
-            #    }
-            #)
-            ##action = np.random.choice(len(prob_dist), p=prob_dist)
-            #action = np.argmax(prob_dist[0][0])
-            #client.memory.append(TransitionExperience(
-            #    state, action, reward=None, real_reward=None, value=0, prob=1))
-
-
             self.send_queue.put([client.ident, dumps(action)])
         self.async_predictor.put_task([state], cb)
 
@@ -253,20 +240,6 @@ class MySimulatorMaster(SimulatorMaster, Callback):
         ####################
         # reward shaping
         ####################
-
-        #var = [v for v in tf.trainable_variables()]
-        #print(var)
-        #var = list(tf.get_collection(tf.GraphKeys.LOCAL_VARIABLES))##]
-        #var_names = [v.name for v in var ]
-        #var = tf.get_variable("conv0/W")
-        #layer = tf.reduce_sum(var)
-        #layer_weight_sum = model.sess.run(layer)
-        #print(layer_weight_sum)
-        #for v in tf.get_default_graph().as_graph_def().node:
-        #    print(v.name)
-
-
-
         if not self.reward_shaping:
             client, state, reward, isOver = msg
             real_reward = reward
@@ -278,9 +251,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
                     self.rs_state_ph : np.expand_dims(state, 0)
                 }
             )
-            #### DEBUG: replace action with pretrained-policy output
             logit = prob_dist[0][0][action]
-            action = np.argmax(prob_dist[0][0])
             real_reward = reward
             reward += logit
 
@@ -379,15 +350,6 @@ def train():
         max_epoch=1000,
     )
     trainer = SimpleTrainer() #if num_gpu == 1 else AsyncMultiGPUTrainer(train_tower)
-
-    #var = [v for v in tf.trainable_variables()]
-    #var_names = [v.name for v in var ]
-    #print(var_names)
-    #layer = tf.reduce_sum(var[0])
-    #print(var[0].name)
-    #layer_weight_sum = model.sess.run(layer)
-    #print(layer_weight_sum)
-    
     launch_train_with_config(config, trainer)
 
 
