@@ -290,36 +290,15 @@ class MySimulatorMaster(SimulatorMaster, Callback):
 
             if isOver:
                 # should clear client's memory and put to queue
-                self._parse_memory_with_cutoff(0, client, True)
+                self._parse_memory(0, client, True)
             else:
                 if len(client.memory) == LOCAL_TIME_MAX + 1:
                     R = client.memory[-1].value
-                    self._parse_memory_with_cutoff(R, client, False)
+                    self._parse_memory(R, client, False)
         # feed state and return action
         self._on_state(state, client)
 
 
-    def _parse_memory_with_cutoff(self, init_r, client, isOver):
-        mem = client.memory
-        if not isOver:
-            last = mem[-1]
-            mem = mem[:-1]
-
-        mem.reverse()
-        R = float(init_r)
-        for idx, k in enumerate(mem):
-            if k.real_reward != 0: # we get one win/loss, stop counting future reward
-                #logger.info("Real reward is : {}".format(k.real_reward))
-                R = np.clip(k.reward, -1, 1)
-            else: # it's not ending yet
-                R = np.clip(k.reward, -1, 1) + GAMMA * R
-            #logger.info(R)
-            self.queue.put([k.state, k.action, R, k.prob])
-
-        if not isOver:
-            client.memory = [last]
-        else:
-            client.memory = []
 
     def _parse_memory(self, init_r, client, isOver):
         mem = client.memory
