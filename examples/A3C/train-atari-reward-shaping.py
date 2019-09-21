@@ -283,7 +283,7 @@ def train(args):
         #args.logit_render_model_checkpoint = os.path.join(settings.supervised_model_checkpoint[args.env], 'checkpoint') 
         args.logit_render_model_checkpoint = settings.pretraind_model_path[args.env] 
     folder_name = 'env_{}_shaping_{}'.format(args.env, args.shaping)
-    dirname = os.path.join(args.reward_shaping_model_path.format(folder_name), folder_name)
+    dirname = args.reward_shaping_model_path.format(folder_name) 
     logger.set_logger_dir(dirname)
 
     # assign GPUs for training & inference
@@ -319,7 +319,8 @@ def train(args):
             ScheduledHyperParamSetter('entropy_beta', [(80, 0.005)]),
             master,
             PeriodicTrigger(Evaluator(
-                EVAL_EPISODE, ['state'], ['policy'], get_player),
+                #EVAL_EPISODE, ['state'], ['policy'], get_player),
+                EVAL_EPISODE, ['state'], ['logit_rewards'], get_player),
                 every_k_steps=2000),
         ],
         session_creator=sesscreate.NewSessionCreator(config=get_default_sess_config(0.5)),
