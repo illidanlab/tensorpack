@@ -23,7 +23,7 @@ from tensorpack.utils.serialize import dumps
 
 from atari_wrapper import FireResetEnv, FrameStack, LimitLength, MapState 
 from common import Evaluator, eval_model_multithread, play_n_episodes
-from simulator import SimulatorMaster, SimulatorProcess, RewardShapingSimulatorMaster, TransitionExperience
+from simulator import SimulatorMaster, SimulatorProcess, TransitionExperience
 
 
 if six.PY3:
@@ -32,17 +32,18 @@ if six.PY3:
 else:
     CancelledError = Exception
 
+import settings 
 IMAGE_SIZE = (84, 84)
 FRAME_HISTORY = 4
 GAMMA = 0.99
 STATE_SHAPE = IMAGE_SIZE + (3, )
 
 LOCAL_TIME_MAX = 5
-STEPS_PER_EPOCH = 6000
+STEPS_PER_EPOCH = 2000
 EVAL_EPISODE = 10
 BATCH_SIZE = 128
 PREDICT_BATCH_SIZE = 16     # batch for efficient forward
-SIMULATOR_PROC = mp.cpu_count() * 2
+SIMULATOR_PROC = 8#mp.cpu_count() * 2
 PREDICTOR_THREAD_PER_GPU = 4
 PREDICTOR_THREAD = None
 
@@ -108,6 +109,7 @@ class Model(ModelDesc):
         log_pi_a_given_s = tf.reduce_sum(
             log_probs * tf.one_hot(action, NUM_ACTIONS), 1)
         advantage = tf.subtract(tf.stop_gradient(value), futurereward, name='advantage')
+        avg_futurereward = tf.reduce_mean(futurereward, name='avg_futurereward')
 
         pi_a_given_s = tf.reduce_sum(policy * tf.one_hot(action, NUM_ACTIONS), 1)  # (B,)
         importance = tf.stop_gradient(tf.clip_by_value(pi_a_given_s / (action_prob + 1e-8), 0, 10))
@@ -122,7 +124,7 @@ class Model(ModelDesc):
                                        initializer=tf.constant_initializer(0.01), trainable=False)
         cost = tf.add_n([policy_loss, xentropy_loss * entropy_beta, value_loss])
         cost = tf.truediv(cost, tf.cast(tf.shape(futurereward)[0], tf.float32), name='cost')
-        summary.add_moving_summary(policy_loss, xentropy_loss,
+        summary.add_moving_summary(policy_loss, xentropy_loss, avg_futurereward,
                                    value_loss, pred_reward, advantage,
                                    cost, tf.reduce_mean(importance, name='importance'))
         return cost
@@ -138,7 +140,7 @@ class Model(ModelDesc):
 
 
 class MySimulatorMaster(SimulatorMaster, Callback):
-    def __init__(self, pipe_c2s, pipe_s2c, gpus):
+    def __init__(self, pipe_c2s, pipe_s2c, gpus, args):
         """
         Args:
             gpus (list[int]): the gpus used to run inference
@@ -146,6 +148,7 @@ class MySimulatorMaster(SimulatorMaster, Callback):
         super(MySimulatorMaster, self).__init__(pipe_c2s, pipe_s2c)
         self.queue = queue.Queue(maxsize=BATCH_SIZE * 8 * 2)
         self._gpus = gpus
+        self.args = args
 
     def _setup_graph(self):
         # Create predictors on the available predictor GPUs.
@@ -175,30 +178,36 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             assert np.all(np.isfinite(distrib)), distrib
             action = np.random.choice(len(distrib), p=distrib)
             client.memory.append(TransitionExperience(
-                #state, action, reward=None, value=value, prob=distrib[action]))
                 state, action, reward=None, real_reward=None, value=value, prob=distrib[action]))
             self.send_queue.put([client.ident, dumps(action)])
         self.async_predictor.put_task([state], cb)
 
-    def _process_msg(self, client, state, reward, isOver):
+    def _process_msg(self, msg):
         """
         Process a message sent from some client.
         """
         # in the first message, only state is valid,
         # reward&isOver should be discarded
+        client, state, action, reward, isOver = msg
+        real_reward = reward
         if len(client.memory) > 0:
             client.memory[-1].reward = reward
+            client.memory[-1].real_reward = real_reward
             if isOver:
                 # should clear client's memory and put to queue
-                #self._parse_memory(0, client, True)
-                self._parse_memory_with_cutoff(0, client, True)
-            else:
-                if len(client.memory) == LOCAL_TIME_MAX + 1:
-                    R = client.memory[-1].value
-                    #self._parse_memory(R, client, False)
-                    self._parse_memory_with_cutoff(R, client, False)
+                R = 0
+                self.parse_memory(R, client, True)
+            elif len(client.memory) == LOCAL_TIME_MAX + 1:
+                R = client.memory[-1].value 
+                self.parse_memory(R, client, False)
         # feed state and return action
         self._on_state(state, client)
+
+    def parse_memory(self, init_r, client, isOver):
+        if self.args.env.startswith("Pong"):
+            self._parse_memory_with_cutoff(init_r, client, isOver)
+        else:
+            self._parse_memory(init_r, client, isOver)
 
     def _parse_memory_with_cutoff(self, init_r, client, isOver):
         mem = client.memory
@@ -219,7 +228,6 @@ class MySimulatorMaster(SimulatorMaster, Callback):
             client.memory = [last]
         else:
             client.memory = []
-
 
     def _parse_memory(self, init_r, client, isOver):
         mem = client.memory
@@ -243,29 +251,22 @@ class MySimulatorMaster(SimulatorMaster, Callback):
         return BatchData(DataFromQueue(self.queue), BATCH_SIZE)
 
 
-def train():
+def train(args):
     assert tf.test.is_gpu_available(), "Training requires GPUs!"
-    dirname = os.path.join('/mnt/research/judy/reward_shaping/train_from_scratch/', 'train-atari-{}'.format(ENV_NAME))
-    logger.set_logger_dir(dirname)
+    logger.set_logger_dir(args.vanilla_model_path)
 
     # assign GPUs for training & inference
-    #num_gpu = get_num_gpu()
-    num_gpu = 1 #get_num_gpu()
+    num_gpu = args.num_gpu 
     global PREDICTOR_THREAD
-    if num_gpu > 0:
-        if num_gpu > 1:
-            # use half gpus for inference
-            predict_tower = list(range(num_gpu))[-num_gpu // 2:]
-        else:
-            predict_tower = [0]
-        PREDICTOR_THREAD = len(predict_tower) * PREDICTOR_THREAD_PER_GPU
-        train_tower = list(range(num_gpu))[:-num_gpu // 2] or [0]
-        logger.info("[Batch-A3C] Train on gpu {} and infer on gpu {}".format(
-            ','.join(map(str, train_tower)), ','.join(map(str, predict_tower))))
+    if num_gpu > 1:
+        # use half gpus for inference
+        predict_tower = list(range(num_gpu))[-num_gpu // 2:]
     else:
-        logger.warn("Without GPU this model will never learn! CPU is only useful for debug.")
-        PREDICTOR_THREAD = 1
-        predict_tower, train_tower = [0], [0]
+        predict_tower = [0]
+    PREDICTOR_THREAD = len(predict_tower) * PREDICTOR_THREAD_PER_GPU
+    train_tower = list(range(num_gpu))[:-num_gpu // 2] or [0]
+    logger.info("[Batch-A3C] Train on gpu {} and infer on gpu {}".format(
+        ','.join(map(str, train_tower)), ','.join(map(str, predict_tower))))
 
     # setup simulator processes
     name_base = str(uuid.uuid1())[:6]
@@ -273,14 +274,11 @@ def train():
     namec2s = 'ipc://{}sim-c2s-{}'.format(prefix, name_base)
     names2c = 'ipc://{}sim-s2c-{}'.format(prefix, name_base)
     procs = [MySimulatorWorker(k, namec2s, names2c) for k in range(SIMULATOR_PROC)]
-    #procs = [MyRewardShapingSimulatorWorker(k, namec2s, names2c) for k in range(SIMULATOR_PROC)]
     
     ensure_proc_terminate(procs)
     start_proc_mask_signal(procs)
 
-    #reward_shaper = RewardShapingSimulatorMaster() 
-
-    master = MySimulatorMaster(namec2s, names2c, predict_tower)
+    master = MySimulatorMaster(namec2s, names2c, predict_tower, args)
     config = TrainConfig(
         model=Model(),
         dataflow=master.get_training_dataflow(),
@@ -291,56 +289,60 @@ def train():
             master,
             PeriodicTrigger(Evaluator(
                 EVAL_EPISODE, ['state'], ['policy'], get_player),
-                #every_k_epochs=1,
-                every_k_steps=1000),
+                every_k_steps=2000),
         ],
         session_creator=sesscreate.NewSessionCreator(config=get_default_sess_config(0.5)),
         steps_per_epoch=STEPS_PER_EPOCH,
-        session_init=SmartInit(args.load),
         max_epoch=1000,
     )
-    trainer = SimpleTrainer() #if num_gpu == 1 else AsyncMultiGPUTrainer(train_tower)
+    trainer = SimpleTrainer() 
     launch_train_with_config(config, trainer)
+
+
+def generate_expert_demonstration(args):
+    if not args.expert_model_path:
+        load_path = args.pretrained_model_path 
+    else:
+        load_path = args.expert_model_path
+    logger.info("Loaded Model Path: {}".format(load_path))
+    preditor = OfflinePredictor(PredictConfig(
+        model=Model(),
+        session_init=SmartInit(load_path),
+        input_names=['state'],
+        output_names=['policy']))
+
+    logger.info("Generating Expert Demonstration.")
+    filename = os.path.join(settings.expert_data_path[args.env], "batch_{}.npz").format(args.expert_data_id)
+    play_n_episodes(get_player(train=False), preditor, args.expert_episode, render=args.render, save=args.expert_save, filename=filename)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--gpu', help='comma separated list of GPU(s) to use.')
-    #parser.add_argument('--load', help='load model', default="/mnt/research/judy/reward_shaping/Pong-v0.npz", type=str)
-    parser.add_argument('--load', help='load model', default="/mnt/research/judy/reward_shaping/Pong-v0.npz", type=str)
     parser.add_argument('--env', help='env', default="Pong-v0", type=str)
+    parser.add_argument('--num_gpu', help='Number of GPUs', default=1, type=int)
+    parser.add_argument('--vanilla_model_path', help='train-from-scratch-model path', default="/mnt/research/judy/reward_shaping/train_from_scratch/{}", type=str)
+    parser.add_argument('--pretrained_model_path', help='pretrained-model path', default="", type=str)
     parser.add_argument('--task', help='task to perform',
-                        choices=['play', 'eval', 'train', 'dump_video'], default='train')
-    parser.add_argument('--output', help='output directory for submission', default='output_dir')
-    parser.add_argument('--episode', help='number of episode to eval', default=1, type=int)
+                        choices=['eval', 'train'], default='train')
+    parser.add_argument('--expert_data_id', help='file id to save expert data', default=1, type=int)
+    parser.add_argument('--expert_episode', help='number of expert episodes to eval', default=10, type=int)
     parser.add_argument('--render', help='If render the environment', default=False, type=bool)
-    parser.add_argument('--save', help='If save episodes', default=False, type=bool)
-    parser.add_argument('--save_id', help='Index of Batches to be collected', default=1, type=int)
+    parser.add_argument('--expert_save', help='If save episodes', default=False, type=bool)
+    parser.add_argument('--expert_model_path', help='Model used to evaluate expert demonstration', default=None)
+
     args = parser.parse_args()
 
     ENV_NAME = args.env
     NUM_ACTIONS = get_player().action_space.n
+
+    args.vanilla_model_path = args.vanilla_model_path.format(ENV_NAME)
+    args.pretrained_model_path = settings.pretraind_model_path[ENV_NAME]
+
     logger.info("Environment: {}, number of actions: {}".format(ENV_NAME, NUM_ACTIONS))
 
-    if args.gpu:
-        os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
+    if args.task == 'eval':
+        generate_expert_demonstration(args)
 
-    if args.task != 'train':
-        assert args.load is not None
-        pred = OfflinePredictor(PredictConfig(
-            model=Model(),
-            session_init=SmartInit(args.load),
-            input_names=['state'],
-            output_names=['policy']))
-        if args.task == 'play':
-            filename = "/mnt/research/judy/reward_shaping/expert_data/batch_{}.npz".format(args.save_id)
-            play_n_episodes(get_player(train=False), pred,
-                            args.episode, render=args.render, save=args.save, filename=filename)
-        elif args.task == 'eval':
-            eval_model_multithread(pred, args.episode, get_player)
-        elif args.task == 'dump_video':
-            play_n_episodes(
-                get_player(train=False, dumpdir=args.output),
-                pred, args.episode)
-    else:
-        train()
+    elif args.task == "train":
+        logger.info("Logger/Model Path: {}".format(args.vanilla_model_path))
+        train(args)

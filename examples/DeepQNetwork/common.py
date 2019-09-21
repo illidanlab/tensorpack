@@ -57,6 +57,7 @@ def play_n_episodes(player, predfunc, nr, render=False, save=False, filename='sa
         if not save:
             score = score_info
             information = "{}/{}, score={}".format(k, nr, score)
+            print(information)
         else:
             score = score_info[0]
             episode_len = len(score_info[1])
