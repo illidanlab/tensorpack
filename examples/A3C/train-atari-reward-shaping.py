@@ -319,7 +319,8 @@ def train(args):
             ScheduledHyperParamSetter('entropy_beta', [(80, 0.005)]),
             master,
             PeriodicTrigger(Evaluator(
-                EVAL_EPISODE, ['state'], ['policy'], get_player),
+                #EVAL_EPISODE, ['state'], ['policy'], get_player),
+                EVAL_EPISODE, ['state'], ['reward_logits'], get_player),
                 every_k_steps=2000),
         ],
         session_creator=sesscreate.NewSessionCreator(config=get_default_sess_config(0.5)),
