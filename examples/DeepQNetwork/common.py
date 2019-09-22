@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 # File: common.py
-# Author: Yuxin Wu
 
 import multiprocessing
 import numpy as np

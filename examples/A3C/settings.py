@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-path_prefix = "/mnt/research/illidan/judy/reward_shaping" 
+path_prefix = "/mnt/research/judy/reward_shaping" 
+#path_prefix = "/mnt/research/illidan/judy/reward_shaping" 
+
 expert_data_path = {
     "Pong-v0": "{}/expert_data/Pong-v0".format(path_prefix),
     "Gravitar-v0": "{}/expert_data/Gravitar-v0".format(path_prefix)
