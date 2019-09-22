@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # File: train-atari.py
-# Author: Yuxin Wu
 
 import argparse
 import cv2
@@ -255,7 +254,9 @@ class MySimulatorMaster(SimulatorMaster, Callback):
 
 def train(args):
     assert tf.test.is_gpu_available(), "Training requires GPUs!"
-    logger.set_logger_dir(args.vanilla_model_path)
+    dirname = os.path.join(settings.path_prefix, "train_from_scratch/{}".format(args.env)) 
+    logger.set_logger_dir(dirname)
+    logger.info("Logger/Model Path: {}".format(dirname))
 
     # assign GPUs for training & inference
     num_gpu = args.num_gpu 
@@ -322,7 +323,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', help='env', default="Pong-v0", type=str)
     parser.add_argument('--num_gpu', help='Number of GPUs', default=1, type=int)
-    parser.add_argument('--vanilla_model_path', help='train-from-scratch-model path', default="/mnt/research/judy/reward_shaping/train_from_scratch/{}", type=str)
     parser.add_argument('--pretrained_model_path', help='pretrained-model path', default="", type=str)
     parser.add_argument('--task', help='task to perform',
                         choices=['eval', 'train'], default='train')
@@ -337,7 +337,6 @@ if __name__ == '__main__':
     ENV_NAME = args.env
     NUM_ACTIONS = get_player().action_space.n
 
-    args.vanilla_model_path = args.vanilla_model_path.format(ENV_NAME)
     args.pretrained_model_path = settings.pretraind_model_path[ENV_NAME]
 
     logger.info("Environment: {}, number of actions: {}".format(ENV_NAME, NUM_ACTIONS))
@@ -346,5 +345,4 @@ if __name__ == '__main__':
         generate_expert_demonstration(args)
 
     elif args.task == "train":
-        logger.info("Logger/Model Path: {}".format(args.vanilla_model_path))
         train(args)

@@ -1,9 +1,20 @@
+#!/bin/sh
+if [ "$#" -ne 2 ]
+then
+    echo "./run_job.sh <env_name> <shaping>(0 for non-shaping, 1 for shallow, 2 for deep)"
+    exit
+else
+    env=$1
+    shaping=$2
+    if [ "$shaping" = "0" ]; then
+	    echo "python train-atari-from-scratch.py --env $env"
+	    python train-atari-from-scratch.py --env $env
+    elif [ "$shaping" = "1" ]; then
+	    echo "python train-atari-reward-shaping.py --env $env --shaping shallow"
+	    python train-atari-reward-shaping.py --env $env --shaping shallow
+    else
+	    echo "python train-atari-reward-shaping.py --env $env --shaping deep"
+	    python train-atari-reward-shaping.py --env $env --shaping deep
+    fi
 
-env="Gravitar-v0"
-echo $env
-## train a supervised agent using expert demonstration data
-python train-atari-from-scratch.py --env $env
-# train from scratch
-# reward-shaping 1
-#python train-atari-rs-exp6.py
-#python train-atari-rs-exp7.py
+fi

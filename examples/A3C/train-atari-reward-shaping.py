@@ -282,8 +282,8 @@ def train(args):
     if not args.logit_render_model_checkpoint:
         #args.logit_render_model_checkpoint = os.path.join(settings.supervised_model_checkpoint[args.env], 'checkpoint') 
         args.logit_render_model_checkpoint = settings.pretraind_model_path[args.env] 
-    folder_name = 'env_{}_shaping_{}'.format(args.env, args.shaping)
-    dirname = args.reward_shaping_model_path.format(folder_name) 
+    dirname = os.path.join(settings.path_prefix, "reward_shaping_model/env_{}_shaping_{}")
+    dirname = dirname.format(args.env, args.shaping) 
     logger.set_logger_dir(dirname)
 
     # assign GPUs for training & inference
@@ -336,7 +336,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', help='env', default="Pong-v0", type=str)
     parser.add_argument('--num_gpu', help='Number of GPUs', default=1, type=int)
-    parser.add_argument('--reward_shaping_model_path', help='reward-shaping-model path', default="/mnt/research/judy/reward_shaping/reward_shaping_model/{}", type=str)
     parser.add_argument('--logit_render_model_checkpoint', help='logit_render_model_checkpoint', default=None, type=str)
     parser.add_argument('--shaping', help='shaping approach',
                         choices=['shallow', 'deep'], default='shallow', type=str)
