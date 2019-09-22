@@ -222,7 +222,8 @@ class MySimulatorMaster(SimulatorMaster, Callback):
                 R = np.clip(k.reward, -1, 1)
             else: # it's not ending yet
                 R = np.clip(k.reward, -1, 1) + GAMMA * R
-            self.queue.put([k.state, k.action, R, k.prob])
+            R2send = np.clip(R, -1, 1)
+            self.queue.put([k.state, k.action, R2send, k.prob])
 
         if not isOver:
             client.memory = [last]
@@ -239,7 +240,8 @@ class MySimulatorMaster(SimulatorMaster, Callback):
         R = float(init_r)
         for idx, k in enumerate(mem):
             R = np.clip(k.reward, -1, 1) + GAMMA * R
-            self.queue.put([k.state, k.action, R, k.prob])
+            R2send = np.clip(R, -1, 1)
+            self.queue.put([k.state, k.action, R2send, k.prob])
 
         if not isOver:
             client.memory = [last]
