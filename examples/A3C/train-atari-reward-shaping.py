@@ -333,6 +333,8 @@ def train(args):
 
 
 if __name__ == '__main__':
+    gpu_options = tf.GPUOptions(allow_growth=True)
+    sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', help='env', default="Pong-v0", type=str)
     parser.add_argument('--num_gpu', help='Number of GPUs', default=1, type=int)
