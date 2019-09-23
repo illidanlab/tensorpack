@@ -19,6 +19,6 @@ pretraind_model_path = {
 }
 
 supervised_model_checkpoint = {
-    "Pong-v0": "{}/sanity/model_checkpoint/".format(path_prefix),
+    "Pong-v0": "{}/sanity/model_checkpoint".format(path_prefix),
     "Gravitar-v0": "{}/sanity/Gravitar-v0/supervised_model_checkpoint".format(path_prefix)
 }

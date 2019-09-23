@@ -508,11 +508,14 @@ class MySimulatorMaster(SimulatorMaster, Callback):
 def train_duel_value(args):
     logger.info("Test")
     assert tf.test.is_gpu_available(), "Training requires GPUs!"
-    if not args.logit_render_model_checkpoint:
-        #args.logit_render_model_checkpoint = os.path.join(settings.supervised_model_checkpoint[args.env], 'checkpoint') 
+    if args.logit_render_model_checkpoint == "pretrained":
         args.logit_render_model_checkpoint = settings.pretraind_model_path[args.env] 
-    dirname = os.path.join(settings.path_prefix, "reward_shaping_model/env-{}-shaping-{}")
-    dirname = dirname.format(args.env, args.shaping) 
+        render = "pretrained"
+    else:
+        args.logit_render_model_checkpoint = os.path.join(settings.supervised_model_checkpoint[args.env], 'checkpoint') 
+        render = "surpervised"
+    dirname = os.path.join(settings.path_prefix, "reward_shaping_model/env-{}-shaping-{}-logit-render-{}")
+    dirname = dirname.format(args.env, args.shaping, render) 
     logger.set_logger_dir(dirname)
 
     # assign GPUs for training & inference
@@ -562,11 +565,14 @@ def train_duel_value(args):
 
 def train(args):
     assert tf.test.is_gpu_available(), "Training requires GPUs!"
-    if not args.logit_render_model_checkpoint:
-        #args.logit_render_model_checkpoint = os.path.join(settings.supervised_model_checkpoint[args.env], 'checkpoint') 
+    if args.logit_render_model_checkpoint == "pretrained":
         args.logit_render_model_checkpoint = settings.pretraind_model_path[args.env] 
-    dirname = os.path.join(settings.path_prefix, "reward_shaping_model/env_{}_shaping_{}")
-    dirname = dirname.format(args.env, args.shaping) 
+        render = "pretrained"
+    else:
+        args.logit_render_model_checkpoint = os.path.join(settings.supervised_model_checkpoint[args.env], 'checkpoint') 
+        render = "surpervised"
+    dirname = os.path.join(settings.path_prefix, "reward_shaping_model/env-{}-shaping-{}-logit-render-{}")
+    dirname = dirname.format(args.env, args.shaping, render) 
     logger.set_logger_dir(dirname)
 
     # assign GPUs for training & inference
@@ -621,7 +627,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', help='env', default="Pong-v0", type=str)
     parser.add_argument('--num_gpu', help='Number of GPUs', default=1, type=int)
-    parser.add_argument('--logit_render_model_checkpoint', help='logit_render_model_checkpoint', default=None, type=str)
+    parser.add_argument(
+        '--logit_render_model_checkpoint', 
+        help='logit_render_model_checkpoint', 
+        choices=["pretrained", "supervised"],
+        default="pretrained", type=str)
     parser.add_argument('--shaping', help='shaping approach',
                         choices=['shallow', 'deep', 'duel-shallow', 'duel-deep'], default='shallow', type=str)
     parser.add_argument('--task', help='task to perform',
